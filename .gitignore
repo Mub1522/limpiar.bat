@@ -1,0 +1,9 @@
+# Configuracion del correo: contiene la API key de Resend
+correo.json
+
+# Datos de cada equipo (se crean al ejecutar)
+limpieza.log
+historial.csv
+
+# Acceso directo: guarda rutas completas de cada equipo (se crea con crear-acceso-directo.ps1)
+*.lnk
