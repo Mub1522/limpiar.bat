@@ -230,6 +230,10 @@ $carpetaPaquetesNuget = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { 
 $carpetasNuget = @($carpetaPaquetesNuget, "$env:LOCALAPPDATA\NuGet\v3-cache", "$env:LOCALAPPDATA\NuGet\plugins-cache") |
     Where-Object { Test-Path $_ }
 $bytesNuget = ($carpetasNuget | ForEach-Object { Get-FolderSize $_ } | Measure-Object -Sum).Sum
+# Logs de las apps de PM2 (Node.js): respeta PM2_HOME si se cambio la carpeta
+$carpetaPm2 = if ($env:PM2_HOME) { $env:PM2_HOME } else { "$HOME\.pm2" }
+$carpetaLogsPm2 = Join-Path $carpetaPm2 'logs'
+$bytesLogsPm2 = if (Test-Path $carpetaLogsPm2) { [double](Get-FolderSize $carpetaLogsPm2) } else { 0 }
 
 # Solo se pregunta lo que aplica en este equipo y en este momento
 $preguntas = New-Object System.Collections.ArrayList
@@ -243,6 +247,10 @@ if ($bytesNuget -gt 50MB) {
     # Con poco tamano no vale la pena preguntar
     [void]$preguntas.Add(@{ Clave = 'nuget'; Titulo = 'Borrar la cache de paquetes NuGet (.NET)'
         Detalle = @("Ocupa $(Format-Tamano $bytesNuget). La proxima compilacion de un proyecto .NET tendra que volver a descargar sus paquetes.") })
+}
+if ($bytesLogsPm2 -gt 50MB) {
+    [void]$preguntas.Add(@{ Clave = 'pm2'; Titulo = 'Vaciar los logs de PM2 (Node.js)'
+        Detalle = @("Ocupan $(Format-Tamano $bytesLogsPm2). Se pierde el historial de salida y errores de las apps; las apps siguen corriendo.") })
 }
 if ($esAdmin) {
     [void]$preguntas.Add(@{ Clave = 'dism'; Titulo = 'Limpieza profunda de Windows (DISM)'
@@ -298,6 +306,7 @@ $borrarImagenesDocker = [bool]$respuestas['imagenes']
 $hacerCompactar       = [bool]$respuestas['compactar']
 $hacerActualizar      = [bool]$respuestas['actualizar']
 $borrarNuget          = [bool]$respuestas['nuget']
+$borrarLogsPm2        = [bool]$respuestas['pm2']
 
 Write-SeccionConsola 'LIMPIEZA EN CURSO'
 Log "Todo listo: puedes dejar la ventana y volver cuando aparezca el resumen." Cyan
@@ -400,8 +409,8 @@ $total += Clear-Folders @(
     "$env:LOCALAPPDATA\AMD\DxCache"
 )
 
-# --- Paso 6: cache de paquetes de desarrollo (pip, npm y, si se autorizo, NuGet) ---
-Log "Paso 6: cache de paquetes de desarrollo (pip, npm y NuGet)" Yellow
+# --- Paso 6: cache de paquetes de desarrollo (pip, npm y, si se autorizo, NuGet y logs de PM2) ---
+Log "Paso 6: cache de paquetes de desarrollo (pip, npm, NuGet) y logs de PM2" Yellow
 $total += Clear-Folders @(
     "$env:LOCALAPPDATA\pip\Cache",
     "$env:LOCALAPPDATA\npm-cache"
@@ -410,6 +419,32 @@ if ($borrarNuget) {
     $total += Clear-Folders $carpetasNuget
 } elseif ($carpetasNuget) {
     Log "  NuGet conservado ($(Format-Tamano $bytesNuget))" DarkGray
+}
+if ($borrarLogsPm2) {
+    # Con PM2 en marcha sus logs estan abiertos: borrarlos no libera nada hasta reiniciarlo,
+    # por eso se vacian con 'pm2 flush'. Con PM2 detenido se borran directamente.
+    $pidPm2 = "$(Get-Content (Join-Path $carpetaPm2 'pm2.pid') -ErrorAction SilentlyContinue)".Trim()
+    # El PID guardado puede haber quedado de otra sesion y ser ahora de otro programa: debe ser node
+    $pm2Activo = $pidPm2 -match '^\d+$' -and
+        [bool](Get-Process -Id $pidPm2 -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'node' })
+    if (-not $pm2Activo) {
+        Log "  Logs de PM2 (PM2 detenido: se borran)" Gray
+        $total += Clear-Folder $carpetaLogsPm2
+    } elseif (-not (Get-Command pm2 -ErrorAction SilentlyContinue)) {
+        Log "  Logs de PM2 conservados: PM2 esta en marcha pero no se encontro el comando pm2" DarkYellow
+    } else {
+        Log "  Logs de PM2 (PM2 en marcha: pm2 flush)" Gray
+        $antes = Get-FolderSize $carpetaLogsPm2
+        # Sin los colores ANSI que pm2 pone en su salida
+        & pm2 flush 2>&1 | ForEach-Object { "$_" -replace '\x1b\[[0-9;]*m', '' } | Where-Object { $_.Trim() } |
+            ForEach-Object { Log "  $($_.Trim())" DarkGray }
+        if ($LASTEXITCODE -ne 0) { Log "  pm2 flush termino con codigo $LASTEXITCODE" DarkYellow }
+        $liberado = [math]::Round([math]::Max([double]0, $antes - (Get-FolderSize $carpetaLogsPm2)) / 1MB, 2)
+        Log "  $liberado MB liberados" Green
+        $total += $liberado
+    }
+} elseif ($bytesLogsPm2 -gt 0) {
+    Log "  Logs de PM2 conservados ($(Format-Tamano $bytesLogsPm2))" DarkGray
 }
 
 if ($esAdmin) {

@@ -24,7 +24,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 
 - Windows 10 u 11, instalado en C:.
 - Windows PowerShell 5.1 (viene con Windows) y permisos de administrador (se piden con la ventana de UAC).
-- Lo demas es opcional: si un programa no esta (Chrome, Brave, Firefox, Docker, WSL, pip, npm, NuGet, drivers NVIDIA/AMD), su parte simplemente no encuentra nada y se sigue. Si `winget` no esta instalado, el paso 15 lo avisa en rojo.
+- Lo demas es opcional: si un programa no esta (Chrome, Brave, Firefox, Docker, WSL, pip, npm, NuGet, PM2, drivers NVIDIA/AMD), su parte simplemente no encuentra nada y se sigue. Si `winget` no esta instalado, el paso 15 lo avisa en rojo.
 - Pensado para Windows en espanol o ingles. En otros idiomas funciona igual, pero el estado de WinRE puede aparecer como "N/D".
 
 ## Como usarlo
@@ -42,6 +42,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
 - **Cerrar el navegador** (solo si hay uno abierto) para limpiar su cache. Se cierra recien al llegar al paso 4.
 - **Borrar la cache de NuGet (.NET)** (solo si ocupa mas de 50 MB). Muestra cuanto ocupa; la proxima compilacion de un proyecto .NET volvera a descargar sus paquetes.
+- **Vaciar los logs de PM2 (Node.js)** (solo si ocupan mas de 50 MB). Muestra cuanto ocupan; se pierde el historial de salida y errores de las apps, que siguen corriendo.
 - **Limpieza profunda (DISM).** Tarda 5-15 min.
 - **Revisar y reparar Windows (SFC + DISM).** Tarda 10-40 min (en este equipo, entre 27 y 41 min) y crea un punto de restauracion antes.
 - **Borrar imagenes de Docker sin usar** (solo si Docker esta abierto y hay alguna). Muestra la lista exacta con el tamano de cada una; se borran solo esas.
@@ -59,7 +60,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 3. **Cache de Windows Update**: detiene sus servicios, borra y los vuelve a iniciar
 4. **Cache de navegadores** (Chrome, Edge, Brave, Firefox) **y de VS Code**: solo cache. No toca historial, cookies ni contrasenas. VS Code no se cierra nunca (podria haber archivos sin guardar): si esta abierto, su cache se salta
 5. **Cache de shaders de la GPU** (NVIDIA, DirectX, AMD)
-6. **Cache de paquetes de desarrollo**: pip y npm siempre; NuGet (.NET) si respondiste S
+6. **Cache de paquetes de desarrollo y logs de PM2**: pip y npm siempre; NuGet (.NET) y los logs de PM2 (`%USERPROFILE%\.pm2\logs`, o `PM2_HOME` si esta definida) si respondiste S. Si PM2 esta en marcha sus logs se vacian con `pm2 flush` (borrarlos no liberaria nada mientras PM2 los tiene abiertos); si esta detenido se borran directamente
 7. **Logs de Windows** (CBS y DISM)
 8. **Cache de Delivery Optimization**
 9. **Limpieza profunda DISM** (si respondiste S)
@@ -136,6 +137,7 @@ Y el correo, en `correo.json` (ver arriba).
 
 ## Historial de cambios
 
+- **2026-11-20** - Paso 6: logs de PM2 (Node.js) con pregunta al inicio, solo si ocupan mas de 50 MB. Con PM2 en marcha se vacian con `pm2 flush`; con PM2 detenido se borran.
 - **2026-11-17** - Paso 12: lo liberado al compactar se mide por cuanto achico cada `.vhdx`. Antes se media por el espacio libre de C:, y el archivo de intercambio de WSL que Windows borra al apagarlo se contaba como compactacion (en la ejecucion del 17/11 sumo ~1.2 GB de mas). Paso 15: Spotify se salta como app que se actualiza sola (winget siempre fallaba con "The installer cannot be run from an administrator context").
 - **2026-11-17** - Icono: nuevo `limpiar.ico` y `crear-acceso-directo.ps1`, que crea en el Escritorio un acceso directo a `limpiar.bat` con ese icono.
 - **2026-11-17** - Preparado para repositorio publico: `.gitignore` (correo.json, log, historial y accesos directos no se suben), plantilla `correo.ejemplo.json`, licencia MIT y seccion de requisitos.
