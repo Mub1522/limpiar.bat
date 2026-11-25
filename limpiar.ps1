@@ -256,7 +256,7 @@ if ($esAdmin) {
     [void]$preguntas.Add(@{ Clave = 'dism'; Titulo = 'Limpieza profunda de Windows (DISM)'
         Detalle = @('Borra versiones viejas de actualizaciones ya instaladas. Tarda 5-15 minutos.') })
     [void]$preguntas.Add(@{ Clave = 'reparacion'; Titulo = 'Revisar y reparar archivos de Windows (SFC + DISM)'
-        Detalle = @('Crea un punto de restauracion antes. Tarda 10-40 minutos.') })
+        Detalle = @('Crea un punto de restauracion antes. Tarda 10-60 minutos.') })
     if ($imagenesDockerSinUso) {
         # Se muestra exactamente que se borraria; despues se borran solo esas (por nombre)
         $bytesImagenes = ($imagenesDockerSinUso | Sort-Object Id -Unique | Measure-Object Bytes -Sum).Sum
@@ -483,6 +483,10 @@ if ($esAdmin) {
             $total += $liberado
         } else {
             Log "  DISM termino con error (codigo $codigo)" Red
+            # 0x800f0806: hay actualizaciones esperando un reinicio
+            if ($codigo -eq -2146498554) {
+                Log "  Windows tiene operaciones pendientes: reinicia el equipo y vuelve a ejecutar la limpieza" Yellow
+            }
         }
     } else {
         Log "  limpieza profunda omitida" DarkYellow
@@ -754,6 +758,18 @@ if ($seActualizo) {
 $appsPendientes = if ($seActualizo) {
     @(Get-AppsDesactualizadas | Where-Object { $_.Id -notin $appsFallidas.Id -and -not $appsAutoactualizables.ContainsKey($_.Id) })
 } else { $appsDisponibles }
+# winget a veces dice que instalo bien pero despues la sigue listando con la misma version disponible
+# (le pasaba a Google Play Games: no lee bien su version). No contarla como actualizada ni como pendiente.
+if ($seActualizo) {
+    $sinEfecto = @($appsActualizadas | Where-Object { $_.Id -in $appsPendientes.Id })
+    if ($sinEfecto) {
+        $motivo = 'winget dijo que se instalo, pero la sigue listando como desactualizada'
+        foreach ($app in $sinEfecto) { Log "  $($app.Nombre): $motivo" DarkYellow }
+        $appsActualizadas = @($appsActualizadas | Where-Object { $_.Id -notin $sinEfecto.Id })
+        $appsPendientes = @($appsPendientes | Where-Object { $_.Id -notin $sinEfecto.Id })
+        $appsFallidas += $sinEfecto | Add-Member -NotePropertyName Motivo -NotePropertyValue $motivo -PassThru -Force
+    }
+}
 
 Log "=== Limpieza completada ===" Cyan
 

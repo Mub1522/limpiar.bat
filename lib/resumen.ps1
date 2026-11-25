@@ -234,7 +234,9 @@ function Show-Resumen($d) {
     Write-Seccion 'ESPACIO'
     $delta = ($d.LibreFin - $d.LibreInicio) / 1GB
     $signo = if ($delta -ge 0) { '+' } else { '' }
-    Write-Dato 'Liberado por la limpieza' ('{0:N2} MB' -f $d.Total) Green
+    # En GB desde 1000 MB: con separador de miles "15.823,82 MB" se lee como 15 MB
+    $liberadoTexto = if ($d.Total -ge 1000) { '{0:N2} GB' -f ($d.Total / 1024) } else { '{0:N0} MB' -f $d.Total }
+    Write-Dato 'Liberado por la limpieza' $liberadoTexto Green
     Write-Dato 'Espacio libre en C:' ('{0:N1} -> {1:N1} GB ({2}{3:N1} GB)' -f ($d.LibreInicio / 1GB), ($d.LibreFin / 1GB), $signo, $delta)
 
     # Comparacion con la limpieza anterior (historial.csv)

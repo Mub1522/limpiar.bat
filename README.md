@@ -44,7 +44,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 - **Borrar la cache de NuGet (.NET)** (solo si ocupa mas de 50 MB). Muestra cuanto ocupa; la proxima compilacion de un proyecto .NET volvera a descargar sus paquetes.
 - **Vaciar los logs de PM2 (Node.js)** (solo si ocupan mas de 50 MB). Muestra cuanto ocupan; se pierde el historial de salida y errores de las apps, que siguen corriendo.
 - **Limpieza profunda (DISM).** Tarda 5-15 min.
-- **Revisar y reparar Windows (SFC + DISM).** Tarda 10-40 min (en este equipo, entre 27 y 41 min) y crea un punto de restauracion antes.
+- **Revisar y reparar Windows (SFC + DISM).** Tarda 10-60 min (en las ejecuciones reales, entre 27 y 52 min) y crea un punto de restauracion antes.
 - **Borrar imagenes de Docker sin usar** (solo si Docker esta abierto y hay alguna). Muestra la lista exacta con el tamano de cada una; se borran solo esas.
 - **Compactar los discos virtuales de Docker/WSL** (solo si existen). Apaga Docker y WSL mientras tanto (los contenedores en marcha se detienen).
 - **Actualizar las aplicaciones desactualizadas (winget).** Algunas apps pueden cerrarse mientras se actualizan.
@@ -63,7 +63,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 6. **Cache de paquetes de desarrollo y logs de PM2**: pip y npm siempre; NuGet (.NET) y los logs de PM2 (`%USERPROFILE%\.pm2\logs`, o `PM2_HOME` si esta definida) si respondiste S. Si PM2 esta en marcha sus logs se vacian con `pm2 flush` (borrarlos no liberaria nada mientras PM2 los tiene abiertos); si esta detenido se borran directamente
 7. **Logs de Windows** (CBS y DISM)
 8. **Cache de Delivery Optimization**
-9. **Limpieza profunda DISM** (si respondiste S)
+9. **Limpieza profunda DISM** (si respondiste S). Si Windows tiene actualizaciones esperando un reinicio, DISM falla (error `0x800f0806`) y el log indica que hay que reiniciar y volver a ejecutar
 
 ### Mantenimiento
 
@@ -76,13 +76,13 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 12. **Compactar discos virtuales de Docker y WSL** (si respondiste S): libera los bloques sin uso (`fstrim`) dentro de Ubuntu y dentro de los datos de Docker, apaga Docker y WSL, compacta cada `.vhdx` y vuelve a abrir Docker Desktop si estaba abierto. No borra nada de adentro, solo achica el archivo. Lo liberado se mide por cuanto achico cada `.vhdx` (no por el espacio libre de C:, que se mezclaria con el archivo de intercambio de WSL que Windows borra al apagarlo). Para recuperar lo que borro Docker, Docker Desktop tiene que estar abierto al empezar (sus datos solo se pueden liberar con Docker en marcha)
 13. **TRIM del SSD** (despues de compactar)
 14. **Puntos de restauracion**: si hay mas de 2, borra los mas viejos
-15. **Aplicaciones desactualizadas (winget)**: siempre las lista; si respondiste S las actualiza una por una. Se saltan las que se actualizan solas: *App Installer* (actualizarlo cierra el propio winget; lo actualiza la Microsoft Store), *Microsoft Edge* (winget no puede actualizarlo; lo hace Edge Update) y *Spotify* (su instalador no funciona como administrador; se actualiza sola). Salen en el resumen como "Se actualizan solas"
+15. **Aplicaciones desactualizadas (winget)**: siempre las lista; si respondiste S las actualiza una por una. Se saltan las que se actualizan solas: *App Installer* (actualizarlo cierra el propio winget; lo actualiza la Microsoft Store), *Microsoft Edge* (winget no puede actualizarlo; lo hace Edge Update) y *Spotify* (su instalador no funciona como administrador; se actualiza sola). Salen en el resumen como "Se actualizan solas". Si winget dice que instalo una app pero despues la sigue listando como desactualizada, sale en "No se pudieron actualizar" con ese motivo (no como actualizada ni como pendiente)
 
 ### Resumen final
 
 Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo, separado en secciones:
 
-- **Espacio**: total liberado, espacio libre en C: antes y despues, la limpieza anterior (hace cuanto fue y cuanto libero) y cuanto se lleno el disco desde entonces, lo liberado dentro de Docker (y que imagenes se borraron) y tamano de los discos virtuales compactados.
+- **Espacio**: total liberado (en GB desde 1000 MB), espacio libre en C: antes y despues, la limpieza anterior (hace cuanto fue y cuanto libero) y cuanto se lleno el disco desde entonces, lo liberado dentro de Docker (y que imagenes se borraron) y tamano de los discos virtuales compactados.
 - **Salud del equipo**, cada linea con `[ OK ]`, `[ !! ]` (aviso) o `[ -- ]` (dato no disponible):
   - Disco: estado, vida usada y temperatura del SSD (aviso si la vida usada llega al 80 % o la temperatura a 80 C; un SSD NVMe trabaja normalmente a 60-75 C con carga, y se mide justo despues del TRIM)
   - Espacio en C: GB libres y porcentaje (aviso por debajo del 15 %, cuando Windows y sus actualizaciones empiezan a tener problemas)
@@ -137,6 +137,7 @@ Y el correo, en `correo.json` (ver arriba).
 
 ## Historial de cambios
 
+- **2026-11-24** - Correcciones tras revisar una ejecucion en otro equipo: el log del historial no mostraba la cantidad de ejecuciones en la primera (`( registrada(s)`); "Liberado por la limpieza" se muestra en GB desde 1000 MB (`15.823,82 MB` se leia como 15 MB); una app que winget dice instalar pero sigue listando ya no aparece a la vez en "Actualizadas" y "Siguen pendientes"; el paso 9 explica el error `0x800f0806` (reiniciar y volver a ejecutar); la pregunta de reparacion estima 10-60 minutos (una ejecucion tardo 52).
 - **2026-11-20** - Paso 6: logs de PM2 (Node.js) con pregunta al inicio, solo si ocupan mas de 50 MB. Con PM2 en marcha se vacian con `pm2 flush`; con PM2 detenido se borran.
 - **2026-11-17** - Paso 12: lo liberado al compactar se mide por cuanto achico cada `.vhdx`. Antes se media por el espacio libre de C:, y el archivo de intercambio de WSL que Windows borra al apagarlo se contaba como compactacion (en la ejecucion del 17/11 sumo ~1.2 GB de mas). Paso 15: Spotify se salta como app que se actualiza sola (winget siempre fallaba con "The installer cannot be run from an administrator context").
 - **2026-11-17** - Icono: nuevo `limpiar.ico` y `crear-acceso-directo.ps1`, que crea en el Escritorio un acceso directo a `limpiar.bat` con ese icono.

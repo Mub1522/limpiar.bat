@@ -38,7 +38,9 @@ function Add-Ejecucion($ruta, $liberadoMB, $libreFinBytes, $avisos) {
     }
     $filas = @()
     if (Test-Path $ruta) { $filas = @(Import-Csv $ruta -Delimiter ';') }
-    $filas = @($filas + $nueva) | Select-Object -Last $script:maxHistorial
+    # @() por fuera: con una sola fila Select-Object devuelve el objeto suelto y en PS 5.1
+    # un PSCustomObject suelto no tiene .Count (el log mostraba "( registrada(s)")
+    $filas = @(@($filas + $nueva) | Select-Object -Last $script:maxHistorial)
     $filas | Export-Csv $ruta -Delimiter ';' -NoTypeInformation -Encoding UTF8
     return $filas.Count
 }
