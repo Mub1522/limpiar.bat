@@ -70,7 +70,8 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 - **El `README.md` siempre al día y fiel al script.** Nunca debe describir algo que el script ya no hace, ni omitir algo que sí hace. En cada cambio a `limpiar.ps1`, `limpiar.bat`, `lib\*.ps1` o al formato de `correo.json`, en el mismo turno y sin que lo pidan:
   - actualizar las secciones afectadas: archivos, preguntas, pasos y su numeración, pasos de administrador, resumen final, correo, configuración, recomendaciones y "Lo que no hace";
   - agregar una entrada con fecha en "Historial de cambios" (la más reciente arriba);
-  - releer el README contra el script para confirmar que nada más quedó desactualizado.
+  - releer el README contra el script para confirmar que nada más quedó desactualizado;
+  - seguir las reglas de estructura del README (sección 10), sobre todo "Requisitos" e "Instalación en otro equipo" (10.2).
 - **Este `CLAUDE.md` también se mantiene al día** en el mismo turno (ver sección 9).
 - **Todo lo útil tiene que quedar en `limpieza.log`** (ver 6.2).
 - **No enviar correos** (por ejemplo, para probar Resend) sin preguntar antes.
@@ -321,3 +322,43 @@ Get-Content limpieza.log | Where-Object { $_ -notmatch '^\[\d\d:\d\d:\d\d\]   (b
 - **No incluir datos personales ni secretos** (repositorio público): ni la API key, ni correos, ni el nombre del equipo, ni rutas del usuario.
 - **Si algo deja de ser cierto, se borra o se corrige**; no se acumulan notas viejas. La historia de los cambios va en el README ("Historial de cambios"), no aquí.
 - **Si se agrega una sección, conservar la numeración** y actualizar las referencias cruzadas ("ver 6.3").
+
+---
+
+## 10. Reglas para escribir el `README.md`
+
+El README es para **quien usa el script en su propio equipo**, sin saber nada del código ni de este PC. El objetivo es que funcione en otros equipos, no solo en este (lo pidió el usuario el 2026-11-26).
+
+### 10.1 Estructura
+
+Orden fijo de las secciones (`##`). Si se agrega una, va en el lugar que le corresponde por tema, no al final:
+
+| # | Sección | Contenido |
+|---|---|---|
+| 1 | Archivos | Tabla de todos los archivos del repo y de los que se generan |
+| 2 | Requisitos | Qué necesita el equipo |
+| 3 | Instalación en otro equipo | Qué ocupa, pasos y qué se copia entre equipos |
+| 4 | Cómo usarlo | Ejecución diaria |
+| 5-6 | Preguntas, Pasos (con "Resumen final" como `###`) | Qué hace el script (igual a 2.1 y al código) |
+| 7-11 | Correo, Sin permisos de administrador, Configuración, Recomendaciones, Lo que no hace | Referencia |
+| 12 | Si modificas el script | Solo para desarrollo: clonar, hook, comandos de las pruebas |
+| 13 | Historial de cambios | `- **AAAA-MM-DD** - texto`, el más reciente arriba |
+
+- Hoy va **sin tildes** (todo ASCII): mantener ese estilo en lo que se agregue.
+- Tablas para inventarios (archivos, campos, comandos), pasos numerados para lo que se hace en orden, bloques de código para los comandos que se copian.
+- Sin datos de este PC (repositorio público): ni rutas del usuario, ni el nombre del equipo, ni correos reales. Ejemplos genéricos (`C:\Herramientas\...`, `tu-correo@ejemplo.com`).
+
+### 10.2 "Requisitos" e "Instalación en otro equipo" siempre al día
+
+Es lo primero que lee alguien que lo instala en otro equipo, y un dato viejo ahí hace que falle sin que se entienda por qué. Revisar estas dos secciones en **cada** cambio, aunque parezca que no las toca:
+
+| Si el cambio... | Actualizar |
+|---|---|
+| Necesita un programa, versión, permiso o configuración de Windows nueva | Requisitos |
+| Agrega un archivo que el usuario tiene que crear, copiar o llenar (como `correo.json`) | Pasos (con el comando para crearlo y una tabla de sus campos), "Qué se copia" y `.gitignore` |
+| Cambia el formato de `correo.json` | La tabla de campos, `correo.ejemplo.json` y la sección Correo |
+| Genera un archivo nuevo, o cambia lo que ocupa uno que ya existe | "Qué ocupa en el equipo" (con el tamaño aproximado) |
+| Deja algo en el equipo (registro, tarea, servicio, perfil temporal) | "Qué ocupa" y la frase "No crea servicios ni tareas..." si deja de ser cierta |
+| Agrega una herramienta de desarrollo (pruebas, analizador) | "Si modificas el script" |
+
+Las tablas de estas secciones se comprueban contra el repo de verdad (`git ls-files`, el tamaño de los archivos, los comandos ejecutados), no de memoria.
