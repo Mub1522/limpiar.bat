@@ -115,7 +115,8 @@ Es la lista completa para un PC nuevo; con decirle a Claude "monta este PC segú
 | 6 | Activar el hook de pre-commit | `git config core.hooksPath .githooks` (README, "Si modificas el script") |
 | 7 | Flujo de git de ese PC | **Preguntarle al usuario** con qué cuenta trabaja ahí, qué remotos usa y con qué identidad hace commit (el repo es público: no usar su nombre real). Anotarlo en `memory-local/` |
 | 8 | `correo.json` (opcional) | Solo si el usuario quiere el correo desde ese PC: README, "Instalación en otro equipo", paso 3. Nunca subirlo ni copiar la API key a otro archivo |
-| 9 | Preferencias generales | Si `~/.claude/CLAUDE.md` de ese PC no tiene el texto de abajo, **preguntarle al usuario** antes de agregarlo (ese archivo vale para todos sus proyectos) |
+| 9 | Acceso directo e icono de la carpeta (opcional) | Doble clic en `crear-acceso-directo.bat` (README, "Instalación en otro equipo", paso 4) |
+| 10 | Preferencias generales | Si `~/.claude/CLAUDE.md` de ese PC no tiene el texto de abajo, **preguntarle al usuario** antes de agregarlo (ese archivo vale para todos sus proyectos) |
 
 Texto de `~/.claude/CLAUDE.md` (copia del de los otros PCs). Si el usuario aprueba un cambio en ese archivo en cualquier PC, actualizar también esta copia en el mismo turno:
 

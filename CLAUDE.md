@@ -76,7 +76,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 - **Todo lo útil tiene que quedar en `limpieza.log`** (ver 6.2).
 - **No enviar correos** (por ejemplo, para probar Resend) sin preguntar antes.
 - **Revisiones elevadas de solo lectura** (puntos de restauración, instantáneas, etc.): escribir un `.ps1` pequeño en el scratchpad y ejecutarlo con `Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -File ...`, guardando el resultado en un archivo de `%TEMP%`. El usuario tiene que aceptar el UAC, así que hay que avisarle antes.
-- **Repositorio público.** `correo.json`, `limpieza.log`, `historial.csv` y `*.lnk` están en `.gitignore`. Nunca subir datos personales: correos, nombre del equipo, rutas del usuario, nombres de proyectos. `correo.json` guarda la **API key de Resend**: nunca copiarla al README, al log, al chat ni a otro archivo. Mantener `correo.ejemplo.json` igual al formato real. `memory-global/` también se sube: nada privado ahí (va a `memory-local/`, ver 11).
+- **Repositorio público.** `correo.json`, `limpieza.log`, `historial.csv`, `desktop.ini` y `*.lnk` están en `.gitignore`. Nunca subir datos personales: correos, nombre del equipo, rutas del usuario, nombres de proyectos. `correo.json` guarda la **API key de Resend**: nunca copiarla al README, al log, al chat ni a otro archivo. Mantener `correo.ejemplo.json` igual al formato real. `memory-global/` también se sube: nada privado ahí (va a `memory-local/`, ver 11).
 - No hacer commit salvo que el usuario lo pida.
 
 ---
@@ -93,7 +93,8 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `lib\salud.ps1` | Datos de salud del equipo (solo lectura). |
 | `lib\historial.ps1` | `historial.csv`: última ejecución, tendencia del espacio, `Format-Hace`. |
 | `lib\correo.ps1` | Lectura de `correo.json` y envío con Resend. |
-| `crear-acceso-directo.ps1` | Crea el acceso directo del Escritorio con `limpiar.ico`. |
+| `crear-acceso-directo.bat` | Lo que abre el usuario: llama al `.ps1` con `-ExecutionPolicy Bypass`, igual que `limpiar.bat`. Un `.ps1` con doble clic se abre en el Bloc de notas, y con *Ejecutar con PowerShell* fallaba a veces por la política de ejecución (lo reportó el usuario el 2026-11-26). Sin admin. |
+| `crear-acceso-directo.ps1` | Crea el acceso directo del Escritorio con `limpiar.ico` y el icono de la carpeta (`desktop.ini` con `IconResource=limpiar.ico,0`, ruta relativa; oculto y de sistema, y la carpeta con el atributo de solo lectura, que el Explorador exige para leerlo). Conserva lo demás de un `desktop.ini` que ya existiera. Un `.bat` no puede tener icono propio: no intentarlo con un `.exe` envoltorio (lo marcan los antivirus y deja de ser un script legible). |
 | `limpiar.ico` | Icono (negro con rojo neón; PNG de 16 a 256 px dentro del `.ico`). |
 | `correo.ejemplo.json` | Plantilla pública de `correo.json`. |
 | `verificar.ps1` | Revisión sin ejecutar la limpieza: sintaxis, solo ASCII, pruebas y PSScriptAnalyzer (si está instalado). Sale con 1 si algo falla. |
