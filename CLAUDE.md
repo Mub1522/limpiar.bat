@@ -183,6 +183,7 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
 - `[math]::Max([double]0, ...)`: `Max(0, x)` usa la versión de Int32 y falla con valores de más de 2 GB.
 - La salida de winget es UTF-8: poner `[Console]::OutputEncoding` en UTF8 mientras se captura. La de sfc es UTF-16 (`Invoke-Herramienta -Unicode`).
 - Un `PSCustomObject` suelto no tiene `.Count` en PS 5.1: envolver en `@(...)`.
+- **Nunca `| Select-Object -First` sobre la salida de `wsl.exe`** (ni de otro programa nativo que cambie el modo de la consola): corta la tubería y mata el proceso antes de que restaure la consola. El 26/11/2026, en `Get-CacheApt`, dejó los saltos de línea sin volver al inicio y todo lo que siguió en pantalla salió en escalera (el log quedó bien, con `TerminatingError(): "The pipeline has been stopped."`). Usar `@(...)[0]`.
 
 ### 6.2 Log (`limpieza.log`)
 

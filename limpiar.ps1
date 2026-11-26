@@ -270,8 +270,10 @@ function Get-DistrosApt {
 }
 
 # Tamano en bytes de la cache de paquetes descargados de apt dentro de una distro (0 si no se puede leer)
+# Sin "| Select-Object -First": corta la tuberia y mata wsl.exe antes de que restaure el modo de la
+# consola, y desde ahi cada salto de linea deja de volver al inicio (texto en escalera, 26/11/2026)
 function Get-CacheApt($distro) {
-    $salida = Invoke-Wsl $distro @('du', '-sb', '/var/cache/apt/archives') | Select-Object -First 1
+    $salida = @(Invoke-Wsl $distro @('du', '-sb', '/var/cache/apt/archives'))[0]
     if ("$salida" -match '^(\d+)') { return [double]$Matches[1] }
     return 0
 }
