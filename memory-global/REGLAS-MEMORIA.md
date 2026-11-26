@@ -101,14 +101,31 @@ El dato, en pocas líneas.
 - Al recorrer un índice, si un `actualizado` tiene más de 3 meses y el dato importa, comprobarlo con el usuario o el repo.
 - La línea `Revisado:` de cada índice se actualiza cuando se revisan todas sus memorias.
 
-## 7. Montar la memoria en otro PC
+## 7. Montar este proyecto en otro PC
 
-El repo ya trae `memory-global/` y `CLAUDE.md` ya la carga (sección 11). En cada PC nuevo solo falta lo local:
+Es la lista completa para un PC nuevo; con decirle a Claude "monta este PC según `REGLAS-MEMORIA.md` §7", se recorre de arriba abajo. El repo ya trae `memory-global/` y `CLAUDE.md` ya la carga (sección 11); falta lo de cada PC.
 
-1. `git clone` o `git pull`.
-2. Crear `memory-local/MEMORY.md` (índice con las secciones Usuario, Feedback, Proyecto y Referencia). Empieza vacía: lo de cada PC se escribe en cada PC.
-3. Crear `CLAUDE.local.md` con `@memory-local/MEMORY.md` y una línea por memoria local.
-4. Agregar `memory-local/` y `CLAUDE.local.md` a `.git/info/exclude` y comprobar con `git check-ignore -v memory-local/MEMORY.md CLAUDE.local.md`.
-5. Dejar en `~/.claude/projects/<proyecto>/memory/MEMORY.md` la línea que remite a las carpetas del repo. Si ese directorio ya tenía memorias, migrarlas con estas reglas y dejar solo la línea.
+| # | Paso | Detalle |
+|---|---|---|
+| 1 | `git clone` o `git pull` en `main` | — |
+| 2 | Crear `memory-local/MEMORY.md` | Índice con las secciones Usuario, Feedback, Proyecto y Referencia. Empieza vacía: lo de cada PC se escribe en cada PC |
+| 3 | Crear `CLAUDE.local.md` | Con `@memory-local/MEMORY.md` y una línea por memoria local |
+| 4 | Sacar los dos de git | Agregar `memory-local/` y `CLAUDE.local.md` a `.git/info/exclude` y comprobar con `git check-ignore -v memory-local/MEMORY.md CLAUDE.local.md` |
+| 5 | Puntero en `~/.claude/projects/<proyecto>/memory/MEMORY.md` | Una línea que remite a las carpetas del repo. Si ese directorio ya tenía memorias, migrarlas con estas reglas y dejar solo la línea |
+| 6 | Activar el hook de pre-commit | `git config core.hooksPath .githooks` (README, "Si modificas el script") |
+| 7 | Flujo de git de ese PC | **Preguntarle al usuario** con qué cuenta trabaja ahí, qué remotos usa y con qué identidad hace commit (el repo es público: no usar su nombre real). Anotarlo en `memory-local/` |
+| 8 | `correo.json` (opcional) | Solo si el usuario quiere el correo desde ese PC: README, "Instalación en otro equipo", paso 3. Nunca subirlo ni copiar la API key a otro archivo |
+| 9 | Preferencias generales | Si `~/.claude/CLAUDE.md` de ese PC no tiene el texto de abajo, **preguntarle al usuario** antes de agregarlo (ese archivo vale para todos sus proyectos) |
 
-`~/.claude/CLAUDE.md` de ese PC no necesita nada de la memoria. Si le falta la sección 1 (preferencias del usuario), preguntarle al usuario antes de copiarla.
+Texto de `~/.claude/CLAUDE.md` (copia del de los otros PCs). Si el usuario aprueba un cambio en ese archivo en cualquier PC, actualizar también esta copia en el mismo turno:
+
+```markdown
+# Instrucciones globales (todos los proyectos)
+
+> **Antes de agregar, cambiar o quitar algo en este archivo, consultarlo con el usuario** y esperar su respuesta. Vale para todos los proyectos y no viaja con git, así que un cambio aquí afecta todo sin que se note. Lo que es de un solo proyecto va en ese proyecto (lo decidió el 2026-11-26).
+
+## 1. Preferencias del usuario
+
+- **Español.** Responder y escribir en español, salvo que el proyecto diga otra cosa (visto en varios proyectos).
+- **Todo visual.** Al explicar, comparar o reportar, usar tablas, diagramas, árboles de archivos o widgets visuales, y mostrar vistas previas en vez de describirlas. Texto corto y escaneable. Porque entiende y revisa más rápido lo que ve que párrafos largos (lo pidió el 2026-11-26).
+```

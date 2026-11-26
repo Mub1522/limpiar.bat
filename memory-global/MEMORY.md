@@ -22,4 +22,4 @@ _(ninguna: las preferencias generales están en `~/.claude/CLAUDE.md` §1)_
 _(ninguna)_
 
 ## Referencia
-- [Reglas de la memoria](REGLAS-MEMORIA.md) — global vs. local, formato, crecimiento, mantenimiento y cómo montarla en otro PC
+- [Reglas de la memoria](REGLAS-MEMORIA.md) — global vs. local, formato, crecimiento, mantenimiento y lista completa para montar el proyecto en otro PC (§7)
