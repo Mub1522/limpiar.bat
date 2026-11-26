@@ -36,18 +36,19 @@ El usuario habla en español. **Todo lo que ve el usuario va en español**: cons
 | 9 | Limpieza profunda: Liberador de espacio (restos de actualización grande) y DISM | sí | DISM; restos de actualización |
 | 10 | Reparación: punto de restauración + DISM RestoreHealth + SFC | sí | sí |
 | 11 | Docker: `prune` sin riesgo; imágenes sin usar solo si se autoriza | sí | imágenes |
-| 12 | Compactar discos virtuales de WSL y Docker (`fstrim` + `diskpart`) | sí | sí |
-| 13 | TRIM del SSD | sí | — |
-| 14 | Puntos de restauración: conserva los `$maxPuntos` más recientes | sí | — |
-| 15 | Apps desactualizadas (winget): siempre lista; actualiza con admin + S | parcial | actualizar |
-| 16 | Revisión de salud, solo lectura (Windows Update, sistema de archivos, hardware, seguridad, respaldo...) | parcial | — |
+| 12 | Paquetes de Linux en WSL: `apt-get update` + `upgrade` (sin instalar ni quitar) y `apt-get clean` | sí | sí (solo si hay distros con apt) |
+| 13 | Compactar discos virtuales de WSL y Docker (`fstrim` + `diskpart`) | sí | sí |
+| 14 | TRIM del SSD | sí | — |
+| 15 | Puntos de restauración: conserva los `$maxPuntos` más recientes | sí | — |
+| 16 | Apps desactualizadas (winget): siempre lista; actualiza con admin + S | parcial | actualizar |
+| 17 | Revisión de salud, solo lectura (Windows Update, sistema de archivos, hardware, seguridad, respaldo...) | parcial | — |
 
 ### 2.2 Lo que NO hace (riesgos que no toma)
 
 Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles**, salvo que el usuario lo pida explícitamente después de conocer el riesgo:
 
 - **Limpiar el registro.** No da una mejora medible, y un error puede dejar programas o Windows sin arrancar.
-- **Desfragmentar.** En un SSD gasta vida útil; para eso está el TRIM (paso 13).
+- **Desfragmentar.** En un SSD gasta vida útil; para eso está el TRIM (paso 14).
 - **Desactivar servicios.** Lo que se gana es mínimo y las fallas aparecen en silencio, a veces semanas después.
 - **"Liberar RAM".** Windows usa la RAM libre como caché; vaciarla hace que todo cargue más lento.
 - **Desactivar programas de inicio.** Solo se informan; decide el usuario.
@@ -55,7 +56,8 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 - **Borrar `C:\Windows\Installer` o `$PatchCache$`.** Sin esos archivos no se pueden reparar ni desinstalar programas.
 - **Borrar la caché de miniaturas.** Exige cerrar el Explorador de Windows y libera muy poco.
 - **`docker volume prune` o `docker image prune -a`.** Los volúmenes guardan las bases de datos de los proyectos.
-- **Instalar actualizaciones de Windows, drivers o BIOS.** Solo se informan (paso 16).
+- **Instalar actualizaciones de Windows, drivers o BIOS.** Solo se informan (paso 17).
+- **`apt full-upgrade`/`dist-upgrade` o `apt autoremove` en WSL.** Instalan o quitan paquetes de los que pueden depender los entornos de desarrollo; el paso 12 solo usa `apt-get upgrade`.
 - **Cerrar VS Code.** Puede haber archivos sin guardar.
 - **Tocar historial, cookies, contraseñas o sesiones** de navegadores y apps.
 - **Borrar la carpeta del almacén de pnpm o la caché de Yarn 2+.** Los proyectos dependen de ellas.
@@ -85,7 +87,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | Archivo | Rol |
 |---|---|
 | `limpiar.bat` | Comprueba si tiene permisos de administrador con `net session`; si no, se relanza con `Start-Process -Verb RunAs`. Después ejecuta `limpiar.ps1` con `-ExecutionPolicy Bypass`. |
-| `limpiar.ps1` | Flujo principal: funciones de apoyo, configuración, preguntas, los 16 pasos numerados, resumen, historial y correo. |
+| `limpiar.ps1` | Flujo principal: funciones de apoyo, configuración, preguntas, los 17 pasos numerados, resumen, historial y correo. |
 | `lib\resumen.ps1` | Presentación del resumen: consola + HTML del correo. |
 | `lib\salud.ps1` | Datos de salud del equipo (solo lectura). |
 | `lib\historial.ps1` | `historial.csv`: última ejecución, tendencia del espacio, `Format-Hace`. |
@@ -100,9 +102,9 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 2. Carga los módulos de `lib\` con dot-sourcing.
 3. Define las funciones de apoyo y la configuración.
 4. **Inicio:** recuadro (`Write-CajaConsola`), reúne los datos que necesitan las preguntas y arma `$preguntas`, solo con las que aplican ahora. Cada pregunta tiene `Clave`, `Titulo` y `Detalle`.
-5. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no, Enter = No, y vuelve a preguntar si la respuesta no es válida. Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
-6. **Pasos 1 a 16**, sin intervención. Los que necesitan administrador van agrupados en `if ($esAdmin) { ... } else { Log "Pasos X a Y omitidos..." }`: hoy son el 2-3 y el 7-14. Al agregar pasos hay que actualizar ese mensaje. Los pasos 15 y 16 corren fuera del grupo y saltan solos sus partes de administrador.
-7. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 16, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
+5. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no, Enter = No, y vuelve a preguntar si la respuesta no es válida. Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$actualizarWsl`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
+6. **Pasos 1 a 17**, sin intervención. Los que necesitan administrador van agrupados en `if ($esAdmin) { ... } else { Log "Pasos X a Y omitidos..." }`: hoy son el 2-3 y el 7-15. Al agregar pasos hay que actualizar ese mensaje. Los pasos 16 y 17 corren fuera del grupo y saltan solos sus partes de administrador.
+7. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 17, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
 8. `Stop-Transcript`. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
 
 ### 4.3 Módulos de `lib\`
@@ -111,8 +113,8 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
   - texto de ancho fijo con colores para la consola y el log (`Out-Resumen`);
   - HTML adaptable para el correo (`Add-Html` en `$resumenHtml`): una tarjeta por sección, filas de tabla y etiquetas de estado; máximo 600 px y 100 % en el celular.
 
-  Nunca escribir contenido del resumen en una sola de las dos versiones. En el correo, solo estilos en línea y tablas (los clientes de correo ignoran `<style>` y flexbox); el texto pasa por `Format-HtmlTexto`. La paleta (negro con rojo neón) está arriba del archivo: `$neon`, `$brilloNeon`, `$fondoHtml`, `$lineaHtml` y `$coloresHtml`. El HTML se declara `color-scheme: dark` para que el modo oscuro del celular no invierta los colores. `Write-Estado` tiene cuatro niveles: `OK`, `AVISO`, `INFO` (solo informa) y `NA` (dato no disponible). Solo `AVISO` se cuenta en `$avisosResumen`, que va en el asunto del correo; lo que el usuario puede tener resuelto de otra forma va como `INFO`. Secciones: Espacio, Salud del equipo (hardware), Windows y seguridad, Programas de inicio, Aplicaciones.
-- **`salud.ps1`**: `Get-SaludEquipo`, que se llama en el paso 16 y deja el detalle en el log con `Log`, junta:
+  Nunca escribir contenido del resumen en una sola de las dos versiones. En el correo, solo estilos en línea y tablas (los clientes de correo ignoran `<style>` y flexbox); el texto pasa por `Format-HtmlTexto`. La paleta (negro con rojo neón) está arriba del archivo: `$neon`, `$brilloNeon`, `$fondoHtml`, `$lineaHtml` y `$coloresHtml`. El HTML se declara `color-scheme: dark` para que el modo oscuro del celular no invierta los colores. `Write-Estado` tiene cuatro niveles: `OK`, `AVISO`, `INFO` (solo informa) y `NA` (dato no disponible). Solo `AVISO` se cuenta en `$avisosResumen`, que va en el asunto del correo; lo que el usuario puede tener resuelto de otra forma va como `INFO`. Secciones: Espacio, Salud del equipo (hardware), Windows y seguridad, Programas de inicio, Aplicaciones y Paquetes de Linux (WSL; solo si hay distros con apt).
+- **`salud.ps1`**: `Get-SaludEquipo`, que se llama en el paso 17 y deja el detalle en el log con `Log`, junta:
   - batería, contadores del SSD, `Repair-Volume -Scan` (admin) y WinRE;
   - versión de Windows;
   - Windows Update, con el COM `Microsoft.Update.Session`: pendientes, opcionales, última instalada y las que fallaron sin volver a instalarse. La búsqueda tarda unos 30-60 s;
@@ -143,18 +145,19 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `Test-InicioHabilitado` | Lee `Explorer\StartupApproved` (primer byte impar = deshabilitado en el Administrador de tareas). |
 | `Get-DiscosVirtuales` | Los `.vhdx` de WSL (`HKCU\...\Lxss`) y `docker_data.vhdx`. |
 | `Test-DockerActivo`, `Get-ImagenesDockerSinUso`, `ConvertFrom-TamanoDocker` | Paso 11. |
+| `Invoke-Wsl`, `Get-DistrosApt`, `Get-CacheApt`, `Update-PaquetesWsl`, `Update-PaquetesAptInstalados` | Paso 12. `Invoke-Wsl` ejecuta como root con `LC_ALL=C`, `DEBIAN_FRONTEND=noninteractive` y `NEEDRESTART_MODE=l`, y captura la salida en UTF-8. |
 | `Get-AppsDesactualizadas` | Lee la tabla de `winget upgrade` por la posición de los títulos (funciona en cualquier idioma). |
 
 ### 4.5 Configuración (al inicio de `limpiar.ps1`)
 
 | Variable | Valor | Uso |
 |---|---|---|
-| `$maxPuntos` | 2 | Puntos de restauración que conserva el paso 14 (borra los más viejos con `srclient.dll!SRRemoveRestorePoint`). |
+| `$maxPuntos` | 2 | Puntos de restauración que conserva el paso 15 (borra los más viejos con `srclient.dll!SRRemoveRestorePoint`). |
 | `$horasTemporales` | 24 | Antigüedad mínima para borrar en los pasos 1 y 2. |
 | `$diasVolcados` | 7 | Si hubo un pantallazo azul en estos días, el paso 7 conserva los volcados. |
 | `$diasRestosActualizacion` | 10 | Los restos de una actualización grande solo se ofrecen borrar pasado este tiempo. |
 
-También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizables` (paso 15).
+También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizables` (paso 16).
 
 ---
 
@@ -193,8 +196,8 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
 
 - Tamaños con `Format-Tamano` (GB desde 1000 MB): con el separador de miles de es-CO, "1.010 MB" se lee como 1 MB.
 - **Por el espacio libre del disco**, cuando el tamaño de los archivos no refleja lo real: Delivery Optimization (paso 8; el tamaño aparente es mucho mayor que lo que ocupa), Liberador de espacio y DISM (paso 9).
-- **Por lo que achicó el archivo** en la compactación (paso 12): `wsl --shutdown` hace que Windows borre `swap.vhdx` de `%TEMP%` segundos después, y el espacio libre lo contaba de más (~1,2 GB el 2026-11-17).
-- **Docker** (paso 11): lo que libera queda dentro de `docker_data.vhdx` y solo vuelve a Windows al compactar. Se muestra aparte y **no** se suma a `$total` (la compactación ya lo cuenta). Por eso el paso 11 va justo antes del 12.
+- **Por lo que achicó el archivo** en la compactación (paso 13): `wsl --shutdown` hace que Windows borre `swap.vhdx` de `%TEMP%` segundos después, y el espacio libre lo contaba de más (~1,2 GB el 2026-11-17).
+- **Docker** (paso 11): lo que libera queda dentro de `docker_data.vhdx` y solo vuelve a Windows al compactar. Se muestra aparte y **no** se suma a `$total` (la compactación ya lo cuenta). Lo mismo con `apt-get clean` en WSL (paso 12). Por eso los pasos 11 y 12 van antes del 13.
 
 ### 6.4 Por paso
 
@@ -208,11 +211,12 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
   - se espera con `WaitForExit` y un tiempo máximo de 20 min, no con `Start-Process -Wait`, que también espera a los procesos que el Liberador deje abiertos;
   - al inicio del script se llama a `Remove-PerfilLiberador`. Los restos solo se preguntan si ninguno es más nuevo que `$diasRestosActualizacion` y suman más de 100 MB. Error `0x800f0806` de DISM = hay operaciones pendientes: reiniciar y volver a ejecutar.
 - **11:** sin preguntar, solo los cuatro `prune` sin riesgo (contenedores, imágenes huérfanas, caché de compilación, redes). Las imágenes sin usar solo se borran con S y solo las que se listaron, por nombre (`docker rmi <tag>`). **Nunca `docker volume prune`.**
-- **12:** primero `fstrim`: `fstrim -a` en las distribuciones normales y `fstrim /mnt/docker-desktop-disk` en `docker-desktop` (solo con Docker Desktop abierto). Sin ese paso, 1,3 GB de imágenes borradas nunca volvieron a Windows. Docker Desktop se vuelve a abrir con `explorer.exe`, para que no herede el permiso de administrador. Si `diskpart compact` falla, se ejecuta `detach vdisk` para no dejar el disco conectado.
+- **12:** solo distros con `/usr/bin/apt-get`; las `docker-desktop*` nunca. `apt-get update --allow-releaseinfo-change-label` (solo la etiqueta: el 25/11/2026 el PPA `ondrej/php` pasó a "PPA for PHP (deprecated)" y apt se detenía). No ampliarlo a `--allow-releaseinfo-change`: un cambio de origen, versión o codename merece que lo mire una persona. La lista de paquetes sale de `apt-get -s upgrade` (`Inst pkg [vieja] (nueva`), y los retenidos de "N not upgraded" (en Ubuntu suelen ser actualizaciones escalonadas, no un problema). `apt-get upgrade -y -o Dpkg::Options::=--force-confold` y `DPkg::Lock::Timeout=120`. De la salida de apt solo van al log `E:`/`W:`/`dpkg:` y el total. `apt-get clean` corre aunque el update falle; si falla, el error real de apt (`E:`) va al resumen.
+- **13:** primero `fstrim`: `fstrim -a` en las distribuciones normales y `fstrim /mnt/docker-desktop-disk` en `docker-desktop` (solo con Docker Desktop abierto). Sin ese paso, 1,3 GB de imágenes borradas nunca volvieron a Windows. Docker Desktop se vuelve a abrir con `explorer.exe`, para que no herede el permiso de administrador. Si `diskpart compact` falla, se ejecuta `detach vdisk` para no dejar el disco conectado.
 - **8:** `Delete-DeliveryOptimizationCache` escribe "Deleting..." con `Write-Host`. En PS 5.1 el transcript registra `Write-Host` aunque se redirija (`6>$null` y `*>$null` no sirven, probado el 25/11/2026), así que se ejecuta en otro `powershell.exe` y se usa su código de salida.
-- **13:** `Optimize-Volume -ReTrim` solo dice `Failed`; el motivo se lee del evento 264 de `Microsoft-Windows-Defrag` (Application) y va a `$trimError`, que el resumen muestra como `AVISO`. Nunca registrar "TRIM terminado" si falló. Caso real del 25/11/2026: `0x89000015`, el volumen tiene el bit de "revisar" puesto por una reparación pendiente (ver 16), y Windows no hace TRIM hasta que se repare.
-- **15:** `$estadoWinget` (`ok`, `al dia`, `no instalado`, `error (codigo N)`). "Al día" solo cuando winget sale con 0 o -1978335212; nunca a partir de una lista vacía. `$appsAutoactualizables` (App Installer, Edge, Spotify) sale como "Se actualizan solas". `$seActualizo` decide qué presentación usa el resumen, no si algo se actualizó. Si winget dice que instaló una app pero la sigue listando, cuenta como fallida.
-- **16:** la búsqueda de Windows Update tarda; las fechas de su historial vienen en UTC (`ToLocalTime()`). WinRE se lee solo de la línea de estado de `reagentc /info` (`Get-EstadoWinRE`). Respaldo: si Documentos y Escritorio no están en OneDrive ni en el Historial de archivos, sale como `INFO`, no como `AVISO` (lo decidió el usuario el 25/11/2026: en su PC es así a propósito). `Repair-Volume -Scan` no es solo lectura: NTFS corrige en línea lo que puede (eventos 130 de `Ntfs` en System) y deja para `chkdsk /spotfix` lo que necesita C: libre. Niveles: corregido en línea → `OK`; necesita SpotFix → `INFO`; cualquier otro error → `AVISO` (`chkdsk C: /f`). Lo que necesita SpotFix es menor por definición (entradas de índice, vínculos) y el estado del disco se vigila aparte con sus contadores. Caso real del 25/11/2026: quedó pendiente una entrada `$I30` de `\Windows\Prefetch`, pero en esa versión de prueba de Windows (26300) no abrían `chkdsk.exe`, `chkntfs.exe` ni `autofmt.exe` ("Acceso denegado" aun como admin), y `Repair-Volume -SpotFix` / `-OfflineScanAndFix` devolvían `Failed`. Como `AVISO` se habría repetido en cada ejecución sin poder resolverse. El detalle sale del informe de la revisión (Application, proveedor `Chkdsk`, evento 26226) y va al log; para más contexto, ver los eventos 98 y 130 de `Ntfs`.
+- **14:** `Optimize-Volume -ReTrim` solo dice `Failed`; el motivo se lee del evento 264 de `Microsoft-Windows-Defrag` (Application) y va a `$trimError`, que el resumen muestra como `AVISO`. Nunca registrar "TRIM terminado" si falló. Caso real del 25/11/2026: `0x89000015`, el volumen tiene el bit de "revisar" puesto por una reparación pendiente (ver 17), y Windows no hace TRIM hasta que se repare.
+- **16:** `$estadoWinget` (`ok`, `al dia`, `no instalado`, `error (codigo N)`). "Al día" solo cuando winget sale con 0 o -1978335212; nunca a partir de una lista vacía. `$appsAutoactualizables` (App Installer, Edge, Spotify) sale como "Se actualizan solas". `$seActualizo` decide qué presentación usa el resumen, no si algo se actualizó. Si winget dice que instaló una app pero la sigue listando, cuenta como fallida.
+- **17:** la búsqueda de Windows Update tarda; las fechas de su historial vienen en UTC (`ToLocalTime()`). WinRE se lee solo de la línea de estado de `reagentc /info` (`Get-EstadoWinRE`). Respaldo: si Documentos y Escritorio no están en OneDrive ni en el Historial de archivos, sale como `INFO`, no como `AVISO` (lo decidió el usuario el 25/11/2026: en su PC es así a propósito). `Repair-Volume -Scan` no es solo lectura: NTFS corrige en línea lo que puede (eventos 130 de `Ntfs` en System) y deja para `chkdsk /spotfix` lo que necesita C: libre. Niveles: corregido en línea → `OK`; necesita SpotFix → `INFO`; cualquier otro error → `AVISO` (`chkdsk C: /f`). Lo que necesita SpotFix es menor por definición (entradas de índice, vínculos) y el estado del disco se vigila aparte con sus contadores. Caso real del 25/11/2026: quedó pendiente una entrada `$I30` de `\Windows\Prefetch`, pero en esa versión de prueba de Windows (26300) no abrían `chkdsk.exe`, `chkntfs.exe` ni `autofmt.exe` ("Acceso denegado" aun como admin), y `Repair-Volume -SpotFix` / `-OfflineScanAndFix` devolvían `Failed`. Como `AVISO` se habría repetido en cada ejecución sin poder resolverse. El detalle sale del informe de la revisión (Application, proveedor `Chkdsk`, evento 26226) y va al log; para más contexto, ver los eventos 98 y 130 de `Ntfs`.
 
 ---
 

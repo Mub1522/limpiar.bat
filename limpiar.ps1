@@ -244,6 +244,113 @@ function Invoke-LiberadorEspacio($categorias, $minutosMaximo = 20) {
     return $liberado
 }
 
+# Ejecuta un programa como root dentro de una distribucion WSL y devuelve su salida (lineas de texto).
+# El codigo de salida queda en $LASTEXITCODE. LC_ALL=C deja la salida de apt en ingles (se lee igual
+# sea cual sea el idioma de la distro); DEBIAN_FRONTEND y NEEDRESTART_MODE=l evitan que apt se quede
+# esperando una respuesta.
+function Invoke-Wsl($distro, $argumentos) {
+    $encAnterior = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    try {
+        & wsl.exe -d $distro -u root --exec env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l @argumentos 2>&1 |
+            ForEach-Object { "$_" }
+    } finally {
+        [Console]::OutputEncoding = $encAnterior
+    }
+}
+
+# Distribuciones WSL que usan apt (Ubuntu, Debian...). Las de Docker Desktop no se tocan nunca.
+function Get-DistrosApt {
+    foreach ($d in Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss -ErrorAction SilentlyContinue) {
+        $nombre = (Get-ItemProperty $d.PSPath).DistributionName
+        if (-not $nombre -or $nombre -like 'docker-desktop*') { continue }
+        Invoke-Wsl $nombre @('test', '-x', '/usr/bin/apt-get') | Out-Null
+        if ($LASTEXITCODE -eq 0) { $nombre }
+    }
+}
+
+# Tamano en bytes de la cache de paquetes descargados de apt dentro de una distro (0 si no se puede leer)
+function Get-CacheApt($distro) {
+    $salida = Invoke-Wsl $distro @('du', '-sb', '/var/cache/apt/archives') | Select-Object -First 1
+    if ("$salida" -match '^(\d+)') { return [double]$Matches[1] }
+    return 0
+}
+
+# Actualiza los paquetes instalados de una distro WSL con apt y borra los paquetes descargados.
+# Solo "apt-get upgrade": no instala ni quita paquetes (eso lo hace full-upgrade, que no se usa), y
+# --force-confold conserva siempre los archivos de configuracion que se hayan modificado.
+function Update-PaquetesWsl($distro) {
+    $r = [pscustomobject]@{ Nombre = $distro; Ok = $false; Error = ''; Paquetes = @(); Retenidos = 0; CacheBytes = 0 }
+    $esperarBloqueo = @('-o', 'DPkg::Lock::Timeout=120')   # si otro apt esta trabajando, esperar hasta 2 min
+
+    Log "  ${distro}: buscando actualizaciones (apt-get update)..."
+    # --allow-releaseinfo-change-label: si un repositorio solo cambia su nombre descriptivo (paso el
+    # 25/11/2026 con el PPA de PHP, que paso a "PPA for PHP (deprecated)"), apt se detiene hasta que
+    # alguien lo acepte. Ese nombre no cambia lo que se instala, asi que se acepta. Los cambios de
+    # origen, version o codename si siguen deteniendo el paso.
+    $salida = Invoke-Wsl $distro (@('apt-get', 'update', '-q', '--allow-releaseinfo-change-label') + $esperarBloqueo)
+    $codigo = $LASTEXITCODE
+    $salida | Where-Object { $_ -match '^(E|W|N): ' } | ForEach-Object { Log "    $_" DarkYellow }
+    if ($codigo -ne 0) {
+        # Sin update no se actualiza nada, pero la cache de apt se borra igual (al final, sin riesgo)
+        $ultimoError = $salida | Where-Object { $_ -match '^E: ' } | Select-Object -Last 1
+        $r.Error = "apt-get update fallo (codigo $codigo)$(if ($ultimoError) { ": $ultimoError" })"
+        Log "    $($r.Error)" Red
+    } else {
+        Update-PaquetesAptInstalados $distro $r $esperarBloqueo
+    }
+
+    # Paquetes .deb descargados: ya no hacen falta. Lo liberado queda dentro del disco virtual de la
+    # distro y vuelve a Windows al compactar (paso 13)
+    $cacheAntes = Get-CacheApt $distro
+    Invoke-Wsl $distro @('apt-get', 'clean') | Out-Null
+    $r.CacheBytes = [math]::Max([double]0, $cacheAntes - (Get-CacheApt $distro))
+    Log ("    cache de apt: {0:N2} MB borrados (apt-get clean)" -f ($r.CacheBytes / 1MB)) DarkGray
+    return $r
+}
+
+# Parte de Update-PaquetesWsl que corre solo si apt-get update funciono: lista lo que hay para
+# actualizar, lo actualiza y anota el resultado en $r
+function Update-PaquetesAptInstalados($distro, $r, $esperarBloqueo) {
+    # Simulacion (no cambia nada) para saber que se va a actualizar:
+    # lineas "Inst paquete [version actual] (version nueva ...)" y el total "... and N not upgraded."
+    $simulacion = Invoke-Wsl $distro @('apt-get', '-s', 'upgrade')
+    $paquetes = @(foreach ($l in $simulacion) {
+        if ($l -match '^Inst (\S+) \[([^\]]+)\] \((\S+)') {
+            [pscustomobject]@{ Nombre = $Matches[1]; Instalada = $Matches[2]; Disponible = $Matches[3] }
+        }
+    })
+    $lineaTotal = $simulacion | Where-Object { $_ -match 'and (\d+) not upgraded' } | Select-Object -Last 1
+    if ($lineaTotal -match 'and (\d+) not upgraded') { $r.Retenidos = [int]$Matches[1] }
+
+    if (-not $paquetes) {
+        Log "    todo al dia" Green
+        $r.Ok = $true
+    } else {
+        Log "    $($paquetes.Count) paquete(s) para actualizar:"
+        foreach ($p in $paquetes) { Log "      $($p.Nombre): $($p.Instalada) -> $($p.Disponible)" DarkGray }
+        Log "    actualizando (apt-get upgrade), puede tardar unos minutos..."
+        $salida = Invoke-Wsl $distro (@('apt-get', 'upgrade', '-y', '-q', '-o', 'Dpkg::Options::=--force-confold') + $esperarBloqueo)
+        $codigo = $LASTEXITCODE
+        # De la salida de apt solo se guardan errores, avisos y el total (el resto es ruido)
+        $salida | Where-Object { $_ -match '^(E|W): |^dpkg: |^\d+ upgraded, ' } | ForEach-Object { Log "    $_" DarkGray }
+        if ($codigo -eq 0) {
+            Log "    $($paquetes.Count) paquete(s) actualizado(s)" Green
+            $r.Ok = $true
+            $r.Paquetes = $paquetes
+        } else {
+            $ultimoError = $salida | Where-Object { $_ -match '^E: ' } | Select-Object -Last 1
+            $r.Error = "apt-get upgrade fallo (codigo $codigo)$(if ($ultimoError) { ": $ultimoError" })"
+            Log "    $($r.Error)" Red
+        }
+    }
+    if ($r.Retenidos -gt 0) {
+        # En Ubuntu suelen ser actualizaciones escalonadas (Ubuntu las libera de a poco) y llegan en otra
+        # ejecucion; si no, son paquetes que necesitan instalar o quitar otros y no se tocan
+        Log "    $($r.Retenidos) paquete(s) retenido(s) por apt: no se actualizan en esta ejecucion" DarkGray
+    }
+}
+
 # Recorta una columna de una linea de tabla sin fallar si la linea es mas corta
 function Get-Columna($linea, $desde, $hasta) {
     if ($desde -ge $linea.Length) { return '' }
@@ -293,9 +400,10 @@ $esAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 $total = 0
 $compactados = @()
-$trimError = $null   # motivo si el TRIM del paso 13 falla (va al resumen)
+$trimError = $null   # motivo si el TRIM del paso 14 falla (va al resumen)
 $dockerLiberado = 0          # bytes liberados dentro del disco virtual de Docker (paso 11)
 $imagenesDockerBorradas = @()
+$actualizacionesWsl = @()    # resultado de apt por distribucion WSL (paso 12)
 $libreInicio = (Get-PSDrive C).Free
 $maxPuntos = 2         # puntos de restauracion a conservar (se borran los mas viejos)
 $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modificar en este tiempo
@@ -330,6 +438,9 @@ $dockerInstalado = [bool](Get-Command docker -ErrorAction SilentlyContinue)
 $dockerActivo = $esAdmin -and (Test-DockerActivo)
 $imagenesDockerSinUso = if ($dockerActivo) { @(Get-ImagenesDockerSinUso) } else { @() }
 $listaImagenes = ($imagenesDockerSinUso.Nombre -join ', ')
+# Distribuciones WSL con apt (consultarlas arranca cada distro unos segundos; solo como administrador,
+# porque el paso que las actualiza solo corre asi)
+$distrosApt = if ($esAdmin) { @(Get-DistrosApt) } else { @() }
 # Cache de NuGet (.NET): paquetes descargados (respeta NUGET_PACKAGES si se cambio la carpeta) y cache HTTP
 $carpetaPaquetesNuget = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { "$HOME\.nuget\packages" }
 $carpetasNuget = @($carpetaPaquetesNuget, "$env:LOCALAPPDATA\NuGet\v3-cache", "$env:LOCALAPPDATA\NuGet\plugins-cache") |
@@ -392,6 +503,11 @@ if ($esAdmin) {
         $detalle += 'Total: hasta {0:N2} GB. Si se vuelven a necesitar hay que descargarlas o reconstruirlas.' -f ($bytesImagenes / 1GB)
         [void]$preguntas.Add(@{ Clave = 'imagenes'; Titulo = 'Borrar imagenes de Docker sin usar'; Detalle = $detalle })
     }
+    if ($distrosApt) {
+        [void]$preguntas.Add(@{ Clave = 'wsl'; Titulo = 'Actualizar los paquetes de Linux en WSL (apt)'
+            Detalle = @("Distribuciones: $($distrosApt -join ', '). Necesita internet.",
+                'Solo actualiza lo que ya esta instalado: no instala ni quita paquetes y conserva tu configuracion.') })
+    }
     if ($discosVirtuales) {
         [void]$preguntas.Add(@{ Clave = 'compactar'; Titulo = 'Compactar los discos virtuales de Docker y WSL'
             Detalle = @('Se apagan Docker y WSL mientras tanto (los contenedores en marcha se detienen).') })
@@ -433,6 +549,7 @@ $borrarRestos         = [bool]$respuestas['restos']
 $hacerDism            = [bool]$respuestas['dism']
 $hacerReparacion      = [bool]$respuestas['reparacion']
 $borrarImagenesDocker = [bool]$respuestas['imagenes']
+$actualizarWsl        = [bool]$respuestas['wsl']
 $hacerCompactar       = [bool]$respuestas['compactar']
 $hacerActualizar      = [bool]$respuestas['actualizar']
 $borrarNuget          = [bool]$respuestas['nuget']
@@ -763,7 +880,7 @@ if ($esAdmin) {
 
     # --- Paso 11: limpieza de Docker ---
     # Va antes de compactar: lo que borra Docker queda libre dentro de su disco virtual,
-    # y solo vuelve a Windows cuando ese disco se compacta (paso 12)
+    # y solo vuelve a Windows cuando ese disco se compacta (paso 13)
     Log "Paso 11: limpieza de Docker" Yellow
     if (-not $dockerInstalado) {
         Log "  Docker no esta instalado: se omite" DarkGray
@@ -814,12 +931,24 @@ if ($esAdmin) {
 
         Log ("  Docker: {0:N2} MB liberados dentro de su disco virtual" -f ($dockerLiberado / 1MB)) Green
         if (-not $hacerCompactar -and $dockerLiberado -gt 0) {
-            Log "  (para que ese espacio vuelva a Windows hay que compactar los discos virtuales: paso 12)" DarkGray
+            Log "  (para que ese espacio vuelva a Windows hay que compactar los discos virtuales: paso 13)" DarkGray
         }
     }
 
-    # --- Paso 12 (opcional): compactar los discos virtuales de Docker y WSL ---
-    Log "Paso 12 (opcional): compactar discos virtuales de Docker/WSL" Yellow
+    # --- Paso 12 (opcional): actualizar los paquetes de Linux en WSL ---
+    # Va antes de compactar: WSL tiene que estar encendido, y lo que libera apt-get clean
+    # vuelve a Windows al compactar (paso 13)
+    Log "Paso 12 (opcional): paquetes de Linux en WSL (apt)" Yellow
+    if (-not $distrosApt) {
+        Log "  no hay distribuciones WSL con apt: se omite" DarkGray
+    } elseif ($actualizarWsl) {
+        foreach ($distro in $distrosApt) { $actualizacionesWsl += Update-PaquetesWsl $distro }
+    } else {
+        Log "  actualizacion de WSL omitida" DarkYellow
+    }
+
+    # --- Paso 13 (opcional): compactar los discos virtuales de Docker y WSL ---
+    Log "Paso 13 (opcional): compactar discos virtuales de Docker/WSL" Yellow
     if ($hacerCompactar) {
         $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
         $dockerAbierto = [bool](Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)
@@ -896,8 +1025,8 @@ if ($esAdmin) {
         Log "  compactacion omitida" DarkYellow
     }
 
-    # --- Paso 13: TRIM del SSD (despues de compactar, para que el SSD sepa lo que se libero) ---
-    Log "Paso 13: optimizacion (TRIM) del SSD" Yellow
+    # --- Paso 14: TRIM del SSD (despues de compactar, para que el SSD sepa lo que se libero) ---
+    Log "Paso 14: optimizacion (TRIM) del SSD" Yellow
     $discoC = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
     if ($discoC.MediaType -eq 'SSD') {
         # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
@@ -922,8 +1051,8 @@ if ($esAdmin) {
         Log "  C: no es SSD, se omite" DarkYellow
     }
 
-    # --- Paso 14: conservar solo los puntos de restauracion mas recientes ---
-    Log "Paso 14: puntos de restauracion (se conservan los $maxPuntos mas recientes)" Yellow
+    # --- Paso 15: conservar solo los puntos de restauracion mas recientes ---
+    Log "Paso 15: puntos de restauracion (se conservan los $maxPuntos mas recientes)" Yellow
     $puntos = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber)
     Log "  hay $($puntos.Count) punto(s) de restauracion"
     if ($puntos.Count -gt $maxPuntos) {
@@ -942,11 +1071,11 @@ if ($esAdmin) {
         Log "  conservado: $($p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')) - $($p.Description)" Green
     }
 } else {
-    Log "Pasos 7 a 14 omitidos: no se ejecuto como administrador" Red
+    Log "Pasos 7 a 15 omitidos: no se ejecuto como administrador" Red
 }
 
-# --- Paso 15: aplicaciones desactualizadas (winget) ---
-Log "Paso 15: aplicaciones desactualizadas (winget)" Yellow
+# --- Paso 16: aplicaciones desactualizadas (winget) ---
+Log "Paso 16: aplicaciones desactualizadas (winget)" Yellow
 $appsActualizadas = @()
 $appsFallidas = @()
 $appsOmitidas = @()
@@ -1020,10 +1149,10 @@ if ($seActualizo) {
     }
 }
 
-# --- Paso 16: revision de salud del equipo (solo lectura: no cambia nada) ---
+# --- Paso 17: revision de salud del equipo (solo lectura: no cambia nada) ---
 # Windows Update, sistema de archivos, errores de hardware, seguridad y respaldo. El resultado va al
 # resumen; el detalle (titulos de actualizaciones, etc.) queda aqui en el log.
-Log "Paso 16: revision de salud del equipo (solo lectura)" Yellow
+Log "Paso 17: revision de salud del equipo (solo lectura)" Yellow
 $discoSistema = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
 $salud = Get-SaludEquipo $discoSistema $esAdmin
 
@@ -1065,6 +1194,9 @@ Show-Resumen @{
     AppsFallidas     = $appsFallidas
     AppsPendientes   = $appsPendientes
     AppsOmitidas     = $appsOmitidas
+    DistrosApt       = $distrosApt
+    ActualizarWsl    = $actualizarWsl
+    ActualizacionesWsl = $actualizacionesWsl
 }
 
 # --- Historial (lib\historial.ps1): se guarda despues del resumen para incluir los avisos ---

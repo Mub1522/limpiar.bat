@@ -1,5 +1,5 @@
 # Datos de salud del equipo para el resumen final (todo de solo lectura: aqui no se cambia nada).
-# Get-SaludEquipo junta todo y deja el detalle en el log (paso 16); lib\resumen.ps1 lo muestra.
+# Get-SaludEquipo junta todo y deja el detalle en el log (paso 17); lib\resumen.ps1 lo muestra.
 # Se carga con dot-sourcing desde limpiar.ps1 (usa su funcion Log).
 
 # Lee el estado de WinRE de la salida de "reagentc /info". Solo mira la linea del estado
