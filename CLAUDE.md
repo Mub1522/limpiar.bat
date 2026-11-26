@@ -76,7 +76,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 - **Todo lo útil tiene que quedar en `limpieza.log`** (ver 6.2).
 - **No enviar correos** (por ejemplo, para probar Resend) sin preguntar antes.
 - **Revisiones elevadas de solo lectura** (puntos de restauración, instantáneas, etc.): escribir un `.ps1` pequeño en el scratchpad y ejecutarlo con `Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -File ...`, guardando el resultado en un archivo de `%TEMP%`. El usuario tiene que aceptar el UAC, así que hay que avisarle antes.
-- **Repositorio público.** `correo.json`, `limpieza.log`, `historial.csv` y `*.lnk` están en `.gitignore`. Nunca subir datos personales: correos, nombre del equipo, rutas del usuario, nombres de proyectos. `correo.json` guarda la **API key de Resend**: nunca copiarla al README, al log, al chat ni a otro archivo. Mantener `correo.ejemplo.json` igual al formato real.
+- **Repositorio público.** `correo.json`, `limpieza.log`, `historial.csv` y `*.lnk` están en `.gitignore`. Nunca subir datos personales: correos, nombre del equipo, rutas del usuario, nombres de proyectos. `correo.json` guarda la **API key de Resend**: nunca copiarla al README, al log, al chat ni a otro archivo. Mantener `correo.ejemplo.json` igual al formato real. `memory-global/` también se sube: nada privado ahí (va a `memory-local/`, ver 11).
 - No hacer commit salvo que el usuario lo pida.
 
 ---
@@ -100,6 +100,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `tests\cargar.ps1` | Carga las funciones de `limpiar.ps1` desde el AST (sin ejecutar el script) y los módulos de `lib\`; `Log` no escribe nada. |
 | `tests\*.Tests.ps1` | Pruebas de Pester (ver 8.4). |
 | `tests\muestras\` | Salidas de ejemplo de winget y apt (UTF-8, sin datos de ningún equipo). |
+| `memory-global\` | Memoria de Claude Code que vale en cualquier PC (ver 11). No la usa el script. |
 | `.githooks\pre-commit` | Corre `verificar.ps1` antes de cada commit. Se activa por equipo con `git config core.hooksPath .githooks`; va en LF (`.gitattributes`) porque lo ejecuta `sh`. |
 
 ### 4.2 Flujo de `limpiar.ps1`
@@ -362,3 +363,20 @@ Es lo primero que lee alguien que lo instala en otro equipo, y un dato viejo ah�
 | Agrega una herramienta de desarrollo (pruebas, analizador) | "Si modificas el script" |
 
 Las tablas de estas secciones se comprueban contra el repo de verdad (`git ls-files`, el tamaño de los archivos, los comandos ejecutados), no de memoria.
+
+---
+
+## 11. Memoria de Claude Code
+
+La memoria del proyecto está en dos carpetas. Las reglas (qué va en cada una, formato, crecimiento) están en `memory-global/REGLAS-MEMORIA.md`.
+
+| Carpeta | Qué guarda | ¿Se sube? | La carga |
+|---|---|---|---|
+| `memory-global/` | Reglas y decisiones que valen en cualquier PC, **sin datos privados** (este repo es público) | Sí | Este archivo (abajo) |
+| `memory-local/` | Lo de cada PC: cuentas de git, remotos, datos privados | No (`.git/info/exclude`) | `CLAUDE.local.md` |
+
+Un `@memory-global/...` por memoria global. Si una no está aquí, no se carga en las sesiones siguientes.
+
+@memory-global/MEMORY.md
+@memory-global/REGLAS-MEMORIA.md
+@memory-global/DOCUMENTACION-AL-DIA.md
