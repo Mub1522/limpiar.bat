@@ -4,8 +4,9 @@ $ErrorActionPreference = 'Continue'
 $logFile = Join-Path $PSScriptRoot 'limpieza.log'
 Start-Transcript -Path $logFile | Out-Null
 
-# Modulos: resumen final (consola + HTML), envio por correo e historial de ejecuciones
+# Modulos: resumen final (consola + HTML), datos de salud, envio por correo e historial de ejecuciones
 . (Join-Path $PSScriptRoot 'lib\resumen.ps1')
+. (Join-Path $PSScriptRoot 'lib\salud.ps1')
 . (Join-Path $PSScriptRoot 'lib\correo.ps1')
 . (Join-Path $PSScriptRoot 'lib\historial.ps1')
 $archivoHistorial = Join-Path $PSScriptRoot 'historial.csv'
@@ -150,6 +151,99 @@ function ConvertFrom-TamanoDocker($texto) {
     return [double]$Matches[1] * $factor
 }
 
+# Cierra un programa: primero amablemente (como cerrar sus ventanas) y lo que quede abierto, a la fuerza
+function Stop-Programa($proceso, $nombre) {
+    Log "  cerrando $nombre..."
+    Get-Process $proceso -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+    Start-Sleep -Seconds 3
+    # Lo que siga abierto (procesos en segundo plano, icono junto al reloj) se cierra a la fuerza
+    Get-Process $proceso -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+# Carpetas de cache de tipo Chrome (Cache, Code Cache, GPUCache) dentro de los datos de una app
+# hecha con Electron o WebView2. Solo esas: nunca sesiones, mensajes ni configuracion.
+function Get-CarpetasCache($raiz) {
+    $encontradas = @()
+    $candidatas = Get-ChildItem $raiz -Directory -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -cin 'Cache', 'Code Cache', 'GPUCache' } | Sort-Object { $_.FullName.Length }
+    foreach ($d in $candidatas) {
+        # Si ya esta dentro de otra carpeta de cache encontrada, esa la incluye
+        if ($encontradas | Where-Object { $d.FullName.StartsWith("$_\") }) { continue }
+        $encontradas += $d.FullName
+    }
+    $encontradas
+}
+
+# Limpia una cache con el comando oficial de su herramienta (pnpm, go) y devuelve los MB liberados,
+# medidos por lo que achico su carpeta
+function Invoke-LimpiezaComando($texto, $carpeta, $exe, $argumentos) {
+    Log "  ${texto}: $(Split-Path $exe -Leaf) $($argumentos -join ' ')"
+    $antes = Get-FolderSize $carpeta
+    & $exe @argumentos 2>&1 | ForEach-Object { "$_" -replace '\x1b\[[0-9;]*m', '' } | Where-Object { $_.Trim() } |
+        ForEach-Object { Log "  $($_.Trim())" DarkGray }
+    if ($LASTEXITCODE -ne 0) { Log "  $exe termino con codigo $LASTEXITCODE" DarkYellow }
+    $liberado = [math]::Round([math]::Max([double]0, $antes - (Get-FolderSize $carpeta)) / 1MB, 2)
+    Log "  $liberado MB liberados" Green
+    return $liberado
+}
+
+# Restos de la ultima actualizacion grande de Windows (cambio de version): la instalacion anterior
+# (Windows.old) y los archivos temporales del instalador ($WINDOWS.~BT, $WINDOWS.~WS)
+function Get-RestosActualizacion {
+    foreach ($n in 'Windows.old', '$WINDOWS.~BT', '$WINDOWS.~WS') {
+        $ruta = Join-Path $env:SystemDrive $n
+        $item = Get-Item -LiteralPath $ruta -Force -ErrorAction SilentlyContinue
+        if (-not $item) { continue }
+        [pscustomobject]@{
+            Nombre   = $n
+            Bytes    = [double](Get-FolderSize $ruta)
+            # Algo modificado en los ultimos dias: puede ser una actualizacion en curso, o la reciente
+            # que todavia se podria deshacer (Windows permite volver atras durante 10 dias)
+            Reciente = Test-Reciente $item (Get-Date).AddDays(-$diasRestosActualizacion)
+        }
+    }
+}
+
+# Ejecuta el Liberador de espacio de Windows solo con las categorias indicadas (nombres de las claves de
+# VolumeCaches) y devuelve los MB liberados. Es la forma que indica Microsoft para lo que tiene permisos
+# especiales o lo que Windows registra (instalacion anterior, paquetes de drivers). Se arma un perfil
+# de una sola vez (/sagerun:42) y se quita al terminar, para no dejar configuracion cambiada.
+$script:raizLiberador = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches'
+$script:marcaLiberador = 'StateFlags0042'
+
+# Quita el perfil temporal del Liberador (/sagerun:42). Devuelve las categorias que lo tenian:
+# al inicio del script sirve para limpiar lo que dejo una ejecucion cortada a mitad del paso 9.
+function Remove-PerfilLiberador {
+    Get-ChildItem $script:raizLiberador -ErrorAction SilentlyContinue |
+        Where-Object { $null -ne (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).($script:marcaLiberador) } |
+        ForEach-Object {
+            Remove-ItemProperty $_.PSPath -Name $script:marcaLiberador -ErrorAction SilentlyContinue
+            $_.PSChildName
+        }
+}
+
+function Invoke-LiberadorEspacio($categorias, $minutosMaximo = 20) {
+    $libreAntes = (Get-PSDrive C).Free
+    Remove-PerfilLiberador | Out-Null
+    foreach ($c in $categorias | Where-Object { Test-Path "$script:raizLiberador\$_" }) {
+        Set-ItemProperty "$script:raizLiberador\$c" -Name $script:marcaLiberador -Value 2 -Type DWord
+    }
+    # Con tiempo maximo: el 24/11/2026 el Liberador (drivers ya reemplazados) paso mas de una hora sin
+    # terminar y la ejecucion quedo trabada ahi. Se espera solo al proceso del Liberador (Start-Process
+    # -Wait tambien espera a cualquier proceso que este deje abierto, y eso puede no terminar nunca).
+    $proceso = Start-Process cleanmgr.exe -ArgumentList '/sagerun:42' -PassThru
+    if (-not $proceso.WaitForExit($minutosMaximo * 60 * 1000)) {
+        Log "  el Liberador de espacio no termino en $minutosMaximo minutos: se cierra y la limpieza sigue" DarkYellow
+        Stop-Process -Id $proceso.Id -Force -ErrorAction SilentlyContinue
+    }
+    Remove-PerfilLiberador | Out-Null
+    # Se mide por el espacio libre del disco (el Liberador no informa cuanto borra)
+    $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
+    Log "  $liberado MB liberados (medido por el espacio libre del disco)" Green
+    return $liberado
+}
+
 # Recorta una columna de una linea de tabla sin fallar si la linea es mas corta
 function Get-Columna($linea, $desde, $hasta) {
     if ($desde -ge $linea.Length) { return '' }
@@ -204,12 +298,22 @@ $imagenesDockerBorradas = @()
 $libreInicio = (Get-PSDrive C).Free
 $maxPuntos = 2         # puntos de restauracion a conservar (se borran los mas viejos)
 $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modificar en este tiempo
+$diasVolcados = 7      # paso 7: si hubo un pantallazo azul en estos dias, se conservan los volcados de memoria
+$diasRestosActualizacion = 10  # paso 9: restos de una actualizacion grande solo se ofrecen borrar pasado este tiempo
 
 $navegadores = @(
     @{ Nombre = 'Chrome';  Proceso = 'chrome';  Datos = "$env:LOCALAPPDATA\Google\Chrome\User Data" },
     @{ Nombre = 'Edge';    Proceso = 'msedge';  Datos = "$env:LOCALAPPDATA\Microsoft\Edge\User Data" },
     @{ Nombre = 'Brave';   Proceso = 'brave';   Datos = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data" },
     @{ Nombre = 'Firefox'; Proceso = 'firefox'; Datos = "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles" }
+) | Where-Object { Test-Path $_.Datos }
+
+# Apps de chat hechas con Electron/WebView2: guardan cache igual que Chrome (se limpia en el paso 4)
+$appsChat = @(
+    @{ Nombre = 'Teams';           Proceso = 'ms-teams'; Datos = "$env:LOCALAPPDATA\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams" },
+    @{ Nombre = 'Teams (clasico)'; Proceso = 'Teams';    Datos = "$env:APPDATA\Microsoft\Teams" },
+    @{ Nombre = 'Discord';         Proceso = 'Discord';  Datos = "$env:APPDATA\discord" },
+    @{ Nombre = 'Slack';           Proceso = 'slack';    Datos = "$env:APPDATA\Slack" }
 ) | Where-Object { Test-Path $_.Datos }
 
 # ======================================================================
@@ -234,6 +338,12 @@ $bytesNuget = ($carpetasNuget | ForEach-Object { Get-FolderSize $_ } | Measure-O
 $carpetaPm2 = if ($env:PM2_HOME) { $env:PM2_HOME } else { "$HOME\.pm2" }
 $carpetaLogsPm2 = Join-Path $carpetaPm2 'logs'
 $bytesLogsPm2 = if (Test-Path $carpetaLogsPm2) { [double](Get-FolderSize $carpetaLogsPm2) } else { 0 }
+# Cache de las apps de chat: si una esta abierta, solo se pregunta si vale la pena cerrarla
+foreach ($app in $appsChat) {
+    $app.Carpetas = @(Get-CarpetasCache $app.Datos)
+    $app.Bytes = [double](($app.Carpetas | ForEach-Object { Get-FolderSize $_ } | Measure-Object -Sum).Sum)
+}
+$restosActualizacion = if ($esAdmin) { @(Get-RestosActualizacion) } else { @() }
 
 # Solo se pregunta lo que aplica en este equipo y en este momento
 $preguntas = New-Object System.Collections.ArrayList
@@ -241,6 +351,13 @@ foreach ($nav in $navegadores) {
     if (Get-Process $nav.Proceso -ErrorAction SilentlyContinue) {
         [void]$preguntas.Add(@{ Clave = "nav:$($nav.Nombre)"; Titulo = "Cerrar $($nav.Nombre) para limpiar su cache"
             Detalle = @("$($nav.Nombre) esta abierto: se cerraran todas sus ventanas.", 'Si dices que no, se salta su cache.') })
+    }
+}
+foreach ($app in $appsChat) {
+    if ($app.Bytes -gt 50MB -and (Get-Process $app.Proceso -ErrorAction SilentlyContinue)) {
+        [void]$preguntas.Add(@{ Clave = "app:$($app.Nombre)"; Titulo = "Cerrar $($app.Nombre) para limpiar su cache"
+            Detalle = @("$($app.Nombre) esta abierto y su cache ocupa $(Format-Tamano $app.Bytes). Se cerrara y no se vuelve a abrir solo.",
+                'Si estas en una llamada, responde N.') })
     }
 }
 if ($bytesNuget -gt 50MB) {
@@ -254,7 +371,16 @@ if ($bytesLogsPm2 -gt 50MB) {
 }
 if ($esAdmin) {
     [void]$preguntas.Add(@{ Clave = 'dism'; Titulo = 'Limpieza profunda de Windows (DISM)'
-        Detalle = @('Borra versiones viejas de actualizaciones ya instaladas. Tarda 5-15 minutos.') })
+        Detalle = @('Borra versiones viejas de actualizaciones y de drivers ya reemplazados. Tarda 5-15 minutos.',
+            'Despues no se podra desinstalar esas actualizaciones ni volver a la version anterior de un driver.') })
+    # Restos de una actualizacion grande: solo si ninguno es reciente (actualizacion en curso o que aun se puede deshacer)
+    $bytesRestos = ($restosActualizacion | Measure-Object Bytes -Sum).Sum
+    if ($bytesRestos -gt 100MB -and -not ($restosActualizacion | Where-Object Reciente)) {
+        $detalle = @('Archivos de la version anterior de Windows y de su instalador:')
+        $detalle += $restosActualizacion | ForEach-Object { "  - C:\$($_.Nombre) ($(Format-Tamano $_.Bytes))" }
+        $detalle += 'Despues ya no se podra volver a la version anterior de Windows. Los borra el Liberador de espacio de Windows.'
+        [void]$preguntas.Add(@{ Clave = 'restos'; Titulo = 'Borrar los restos de la ultima actualizacion grande de Windows'; Detalle = $detalle })
+    }
     [void]$preguntas.Add(@{ Clave = 'reparacion'; Titulo = 'Revisar y reparar archivos de Windows (SFC + DISM)'
         Detalle = @('Crea un punto de restauracion antes. Tarda 10-60 minutos.') })
     if ($imagenesDockerSinUso) {
@@ -300,6 +426,9 @@ $cerrarNav = @{}
 foreach ($nav in $navegadores) {
     if ($respuestas.ContainsKey("nav:$($nav.Nombre)")) { $cerrarNav[$nav.Nombre] = $respuestas["nav:$($nav.Nombre)"] }
 }
+$cerrarApp = @{}
+foreach ($app in $appsChat) { $cerrarApp[$app.Nombre] = [bool]$respuestas["app:$($app.Nombre)"] }
+$borrarRestos         = [bool]$respuestas['restos']
 $hacerDism            = [bool]$respuestas['dism']
 $hacerReparacion      = [bool]$respuestas['reparacion']
 $borrarImagenesDocker = [bool]$respuestas['imagenes']
@@ -310,6 +439,13 @@ $borrarLogsPm2        = [bool]$respuestas['pm2']
 
 Write-SeccionConsola 'LIMPIEZA EN CURSO'
 Log "Todo listo: puedes dejar la ventana y volver cuando aparezca el resumen." Cyan
+if ($esAdmin) {
+    # Si una ejecucion anterior se corto en medio del Liberador de espacio (paso 9), su perfil temporal quedo puesto
+    $marcasViejas = @(Remove-PerfilLiberador)
+    if ($marcasViejas) {
+        Log "Se quito el perfil temporal del Liberador de espacio que dejo una ejecucion anterior cortada ($($marcasViejas -join ', '))" DarkYellow
+    }
+}
 
 # --- Paso 1: archivos temporales del usuario ---
 Log "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h" Yellow
@@ -332,8 +468,16 @@ if ($esAdmin) {
     }
     $total += Clear-Folder $wuCache
     foreach ($s in $servicios) {
-        Log "  reiniciando servicio $s..."
-        Start-Service $s -ErrorAction SilentlyContinue
+        # Sin -WarningAction, PowerShell escribe "ADVERTENCIA: Esperando a que se inicie el servicio..."
+        # cada pocos segundos mientras arranca (BITS suele tardar): asusta y no dice si al final arranco.
+        # En su lugar se registra el estado final.
+        Start-Service $s -ErrorAction SilentlyContinue -ErrorVariable errServicio -WarningAction SilentlyContinue
+        $estado = (Get-Service $s -ErrorAction SilentlyContinue).Status
+        if ("$estado" -eq 'Running') { Log "  servicio $s en marcha de nuevo" }
+        else {
+            # No es grave: Windows lo vuelve a iniciar solo cuando lo necesita
+            Log "  servicio $s quedo en estado '$estado' (Windows lo inicia solo cuando lo necesita)" DarkYellow
+        }
     }
 } else {
     Log "Pasos 2 y 3 omitidos: no se ejecuto como administrador" Red
@@ -341,7 +485,7 @@ if ($esAdmin) {
 
 # --- Paso 4: cache de navegadores y VS Code ---
 # Solo cache (no toca historial, cookies, contrasenas ni sesiones)
-Log "Paso 4: cache de navegadores y VS Code" Yellow
+Log "Paso 4: cache de navegadores, VS Code y apps de chat" Yellow
 foreach ($nav in $navegadores) {
     # Con el navegador abierto la cache esta bloqueada: solo se cierra si se autorizo al inicio
     if (Get-Process $nav.Proceso -ErrorAction SilentlyContinue) {
@@ -350,12 +494,7 @@ foreach ($nav in $navegadores) {
             Log "  $($nav.Nombre) esta abierto y no se autorizo cerrarlo: omitido" DarkYellow
             continue
         }
-        Log "  cerrando $($nav.Nombre)..."
-        Get-Process $nav.Proceso -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
-        Start-Sleep -Seconds 3
-        # Lo que siga abierto (procesos en segundo plano) se cierra a la fuerza
-        Get-Process $nav.Proceso -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+        Stop-Programa $nav.Proceso $nav.Nombre
     }
 
     if ($nav.Proceso -eq 'firefox') {
@@ -390,6 +529,22 @@ if (Test-Path $carpetaVSCode) {
     }
 }
 
+# Apps de chat (Teams, Discord, Slack): solo su cache de tipo Chrome. Si estan abiertas se saltan,
+# salvo que se haya autorizado cerrarlas (solo se pregunta cuando la cache pasa de 50 MB)
+foreach ($app in $appsChat | Where-Object { $_.Carpetas }) {
+    if (Get-Process $app.Proceso -ErrorAction SilentlyContinue) {
+        if (-not $cerrarApp[$app.Nombre]) {
+            Log "  $($app.Nombre) esta abierto: su cache ($(Format-Tamano $app.Bytes)) se salta" DarkYellow
+            continue
+        }
+        Stop-Programa $app.Proceso $app.Nombre
+    }
+    foreach ($c in $app.Carpetas | Where-Object { Test-Path $_ }) {
+        Log "  $($app.Nombre): $c"
+        $total += Clear-Folder $c
+    }
+}
+
 # Limpia una lista de carpetas, saltando las que no existen
 function Clear-Folders($carpetas) {
     $liberado = 0
@@ -410,11 +565,32 @@ $total += Clear-Folders @(
 )
 
 # --- Paso 6: cache de paquetes de desarrollo (pip, npm y, si se autorizo, NuGet y logs de PM2) ---
-Log "Paso 6: cache de paquetes de desarrollo (pip, npm, NuGet) y logs de PM2" Yellow
+Log "Paso 6: cache de paquetes de desarrollo (pip, npm, Yarn, pnpm, Go, NuGet) y logs de PM2" Yellow
+# Yarn 1: los proyectos tienen su propia copia en node_modules. La cache de Yarn 2+ (Berry) no se toca:
+# con Plug'n'Play los proyectos leen los paquetes directamente de ahi y dejarian de funcionar hasta reinstalar.
 $total += Clear-Folders @(
     "$env:LOCALAPPDATA\pip\Cache",
-    "$env:LOCALAPPDATA\npm-cache"
+    "$env:LOCALAPPDATA\npm-cache",
+    "$env:LOCALAPPDATA\Yarn\Cache"
 )
+# pnpm: los node_modules de los proyectos son enlaces a su almacen, asi que no se borra la carpeta;
+# 'pnpm store prune' quita solo los paquetes que ya no usa ningun proyecto
+# Se usa pnpm.cmd y no pnpm.ps1: el .ps1 de npm/nvm muestra los avisos de pnpm como errores rojos
+# de PowerShell (NativeCommandError) y repite cada linea en el log
+$exePnpm = Get-Command pnpm.cmd, pnpm.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($exePnpm) {
+    $almacenPnpm = "$(& $exePnpm.Source store path 2>$null)".Trim()
+    if ($almacenPnpm -and (Test-Path $almacenPnpm)) {
+        $total += Invoke-LimpiezaComando 'pnpm, paquetes sin usar' $almacenPnpm $exePnpm.Source @('store', 'prune')
+    }
+}
+# Go: cache de compilacion (se regenera al compilar). Los modulos descargados no se tocan.
+if (Get-Command go -ErrorAction SilentlyContinue) {
+    $cacheGo = "$(& go env GOCACHE 2>$null)".Trim()
+    if ($cacheGo -and (Test-Path $cacheGo)) {
+        $total += Invoke-LimpiezaComando 'Go, cache de compilacion' $cacheGo 'go' @('clean', '-cache')
+    }
+}
 if ($borrarNuget) {
     $total += Clear-Folders $carpetasNuget
 } elseif ($carpetasNuget) {
@@ -448,11 +624,40 @@ if ($borrarLogsPm2) {
 }
 
 if ($esAdmin) {
-    # --- Paso 7: logs de instalacion de Windows ---
-    Log "Paso 7: logs de Windows (CBS y DISM)" Yellow
+    # --- Paso 7: logs, volcados de memoria e informes de error de Windows ---
+    Log "Paso 7: logs de Windows (CBS y DISM), volcados de memoria e informes de error" Yellow
     $total += Clear-Folders @(
         "$env:SystemRoot\Logs\CBS",
         "$env:SystemRoot\Logs\DISM"
+    )
+    # Los volcados de memoria solo sirven para averiguar la causa de un pantallazo azul:
+    # si hubo uno hace poco (o no se pudo saber) se conservan
+    $cuelgues = Get-CuelguesRecientes $diasVolcados
+    if (-not $cuelgues) {
+        Log "  volcados de memoria conservados: no se pudo leer el registro de eventos para saber si hubo un pantallazo azul" DarkYellow
+    } elseif ($cuelgues.UltimoPantallazo) {
+        Log ("  volcados de memoria conservados: hubo un pantallazo azul el {0:dd/MM HH:mm} (sirven para averiguar la causa)" -f $cuelgues.UltimoPantallazo) DarkYellow
+    } else {
+        Log "  volcados de memoria (sin pantallazos azules en los ultimos $diasVolcados dias)"
+        $volcado = "$env:SystemRoot\MEMORY.DMP"
+        if (Test-Path $volcado) {
+            $bytes = (Get-Item $volcado -Force).Length
+            Remove-Item $volcado -Force -ErrorAction SilentlyContinue -ErrorVariable err
+            if ($err) { Log "  MEMORY.DMP en uso, omitido" DarkYellow }
+            else {
+                Log "  $volcado borrado ($(Format-Tamano $bytes))" Green
+                $total += [math]::Round($bytes / 1MB, 2)
+            }
+        }
+        $total += Clear-Folders @(
+            "$env:SystemRoot\Minidump",
+            "$env:SystemRoot\LiveKernelReports"
+        )
+    }
+    # Informes de error de Windows ya enviados o en cola (los mismos que borra el Liberador de espacio)
+    $total += Clear-Folders @(
+        "$env:ProgramData\Microsoft\Windows\WER\ReportArchive",
+        "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"
     )
 
     # --- Paso 8: cache de Delivery Optimization (comando oficial de Windows) ---
@@ -471,7 +676,35 @@ if ($esAdmin) {
     }
 
     # --- Paso 9 (opcional): limpieza de componentes de Windows con DISM ---
-    Log "Paso 9 (opcional): limpieza profunda de componentes de Windows (DISM)" Yellow
+    Log "Paso 9 (opcional): limpieza profunda de Windows (restos de actualizaciones grandes y DISM)" Yellow
+    # Liberador de espacio de Windows: restos de la actualizacion grande (si se autorizo) y, con la
+    # limpieza profunda, los paquetes de drivers que ya tienen una version mas nueva instalada
+    $categoriasLiberador = @()
+    $queLiberador = @()
+    if ($borrarRestos) {
+        $categoriasLiberador += 'Previous Installations', 'Temporary Setup Files', 'Windows Upgrade Log Files', 'Setup Log Files'
+        $queLiberador += 'restos de la actualizacion grande'
+    }
+    if ($hacerDism) {
+        $categoriasLiberador += 'Device Driver Packages'
+        $queLiberador += 'drivers ya reemplazados'
+    }
+    if ($categoriasLiberador) {
+        Log "  Liberador de espacio de Windows ($($queLiberador -join ' y ')), puede tardar unos minutos..."
+        $total += Invoke-LiberadorEspacio $categoriasLiberador
+        if ($borrarRestos) {
+            foreach ($r in @(Get-RestosActualizacion)) {
+                Log "  quedo C:\$($r.Nombre) ($(Format-Tamano $r.Bytes)): el Liberador no lo borro" DarkYellow
+            }
+        }
+    }
+    if (-not $borrarRestos -and $restosActualizacion) {
+        if ($restosActualizacion | Where-Object Reciente) {
+            Log "  restos de actualizaciones conservados: tienen menos de $diasRestosActualizacion dias (actualizacion en curso, o aun se puede volver atras)" DarkGray
+        } else {
+            Log "  restos de actualizaciones conservados ($(Format-Tamano $bytesRestos))" DarkGray
+        }
+    }
     if ($hacerDism) {
         $libreAntes = (Get-PSDrive C).Free
         Log "  ejecutando DISM, no cierres esta ventana..."
@@ -489,7 +722,7 @@ if ($esAdmin) {
             }
         }
     } else {
-        Log "  limpieza profunda omitida" DarkYellow
+        Log "  limpieza con DISM omitida" DarkYellow
     }
 
     # --- Paso 10 (opcional): revisar y reparar archivos de Windows ---
@@ -665,9 +898,12 @@ if ($esAdmin) {
     Log "Paso 13: optimizacion (TRIM) del SSD" Yellow
     $discoC = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
     if ($discoC.MediaType -eq 'SSD') {
-        # Sin las lineas intermedias "NN% completado..." (solo ruido en el log)
+        # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
+        # solo mensaje con saltos de linea y tabuladores: se parte para que cada linea lleve su hora.
         Optimize-Volume -DriveLetter C -ReTrim -Verbose 4>&1 |
-            Where-Object { "$_" -notmatch '\d+% completado\.\.\.' } |
+            ForEach-Object { "$_" -split "`r?`n" } |
+            ForEach-Object { ($_ -replace "`t", '  ').TrimEnd() } |
+            Where-Object { $_.Trim() -and $_ -notmatch '\d+% completado' } |
             ForEach-Object { Log "  $_" DarkGray }
         Log "  TRIM terminado" Green
     } else {
@@ -683,14 +919,15 @@ if ($esAdmin) {
         Add-Type -Namespace Win32 -Name SrClient -MemberDefinition `
             '[DllImport("srclient.dll")] public static extern int SRRemoveRestorePoint(int index);'
         foreach ($p in $puntos[0..($puntos.Count - $maxPuntos - 1)]) {
-            $fecha = $p.ConvertToDateTime($p.CreationTime)
+            # ToString explicito: "$fecha" usa el formato de EE. UU. (mes/dia) aunque Windows este en espanol
+            $fecha = $p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')
             $codigo = [Win32.SrClient]::SRRemoveRestorePoint([int]$p.SequenceNumber)
             if ($codigo -eq 0) { Log "  borrado el mas viejo: $fecha - $($p.Description)" DarkGray }
             else { Log "  no se pudo borrar $fecha - $($p.Description) (codigo $codigo)" DarkYellow }
         }
     }
     foreach ($p in Get-ComputerRestorePoint -ErrorAction SilentlyContinue) {
-        Log "  conservado: $($p.ConvertToDateTime($p.CreationTime)) - $($p.Description)" Green
+        Log "  conservado: $($p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')) - $($p.Description)" Green
     }
 } else {
     Log "Pasos 7 a 14 omitidos: no se ejecuto como administrador" Red
@@ -771,6 +1008,13 @@ if ($seActualizo) {
     }
 }
 
+# --- Paso 16: revision de salud del equipo (solo lectura: no cambia nada) ---
+# Windows Update, sistema de archivos, errores de hardware, seguridad y respaldo. El resultado va al
+# resumen; el detalle (titulos de actualizaciones, etc.) queda aqui en el log.
+Log "Paso 16: revision de salud del equipo (solo lectura)" Yellow
+$discoSistema = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
+$salud = Get-SaludEquipo $discoSistema $esAdmin
+
 Log "=== Limpieza completada ===" Cyan
 
 # ======================================================================
@@ -787,12 +1031,14 @@ $inicio = @(Get-CimInstance Win32_StartupCommand |
 $unidadC = Get-PSDrive C
 Show-Resumen @{
     EsAdmin          = $esAdmin
-    DiscoC           = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
+    DiscoC           = $discoSistema
+    Salud            = $salud
     Total            = $total
     LibreInicio      = $libreInicio
     LibreFin         = $unidadC.Free
     TamanoC          = $unidadC.Used + $unidadC.Free
     Anterior         = Get-UltimaEjecucion $archivoHistorial
+    Tendencia        = Get-TendenciaEspacio $archivoHistorial $unidadC.Free ($unidadC.Used + $unidadC.Free)
     Compactados      = $compactados
     DockerInstalado  = $dockerInstalado
     DockerActivo     = $dockerActivo

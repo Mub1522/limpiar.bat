@@ -9,11 +9,18 @@ $script:resumenHtml = New-Object Text.StringBuilder
 $script:tarjetaAbierta = $false
 $script:avisosResumen = 0
 
-# Colores de consola -> colores de texto del correo (fondo blanco)
+# Estilo del correo: negro con rojo neon. El brillo (text-shadow) solo se ve en los clientes que
+# lo soportan (Apple Mail, iOS); en el resto queda el rojo plano, que se lee igual.
+$script:neon       = '#ff2a45'
+$script:brilloNeon = 'text-shadow:0 0 6px rgba(255,42,69,.75),0 0 14px rgba(255,42,69,.45)'
+$script:fondoHtml  = '#050506'
+$script:lineaHtml  = '#232329'
+
+# Colores de consola -> colores de texto del correo (fondo negro)
 $script:coloresHtml = @{
-    Cyan  = '#0e7490'; DarkCyan = '#0e7490'
-    Green = '#15803d'; Yellow   = '#a16207'; Red = '#b91c1c'
-    White = '#0f172a'; Gray     = '#0f172a'; DarkGray = '#64748b'
+    Cyan  = $script:neon; DarkCyan = $script:neon
+    Green = '#4ade80'; Yellow   = '#facc15'; Red = '#ff5c6c'
+    White = '#f4f4f5'; Gray     = '#f4f4f5'; DarkGray = '#8b8b94'
 }
 $script:fuenteHtml = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
@@ -72,9 +79,10 @@ function Write-Cabecera($titulo, $subtitulo) {
     Write-CajaConsola $titulo
     Out-Resumen "  $subtitulo" DarkGray
 
-    Add-Html ('<tr><td style="background:#0e7490;border-radius:12px;padding:20px 20px 18px;color:#ffffff">' +
-        '<div style="font-size:20px;font-weight:700;line-height:1.3">' + (Format-HtmlTexto $titulo) + '</div>' +
-        '<div style="font-size:13px;color:#cffafe;margin-top:4px">' + (Format-HtmlTexto $subtitulo) + '</div>' +
+    Add-Html ('<tr><td style="background:#000000;border:1px solid ' + $script:neon + ';border-radius:12px;padding:20px 20px 18px">' +
+        '<div style="font-size:20px;font-weight:800;letter-spacing:1px;line-height:1.3;color:' + $script:neon + ';' + $script:brilloNeon + '">' +
+        (Format-HtmlTexto $titulo) + '</div>' +
+        '<div style="font-size:13px;color:#a1a1aa;margin-top:4px">' + (Format-HtmlTexto $subtitulo) + '</div>' +
         '</td></tr>')
 }
 
@@ -84,8 +92,9 @@ function Write-Seccion($titulo) {
     Close-Tarjeta
     Add-Html ('<tr><td style="padding-top:12px">' +
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
-        'style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px"><tr><td style="padding:14px 16px 10px">' +
-        '<div style="font-size:12px;font-weight:700;letter-spacing:1px;color:#0e7490;padding-bottom:4px">' +
+        'style="background:#111114;border:1px solid #3d0d17;border-left:3px solid ' + $script:neon + ';border-radius:12px">' +
+        '<tr><td style="padding:14px 16px 10px">' +
+        '<div style="font-size:12px;font-weight:700;letter-spacing:1px;color:' + $script:neon + ';' + $script:brilloNeon + ';padding-bottom:4px">' +
         (Format-HtmlTexto $titulo) + '</div>')
     $script:tarjetaAbierta = $true
 }
@@ -94,30 +103,32 @@ function Write-Seccion($titulo) {
 function Write-Dato($etiqueta, $valor, $color = 'White') {
     Out-Resumen ('    ' + "$etiqueta ".PadRight(30, '.') + ' ' + $valor) $color
 
-    Add-Html ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #f1f5f9"><tr>' +
-        '<td style="padding:8px 8px 8px 0;font-size:14px;color:#475569">' + (Format-HtmlTexto $etiqueta) + '</td>' +
+    Add-Html ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid ' + $script:lineaHtml + '"><tr>' +
+        '<td style="padding:8px 8px 8px 0;font-size:14px;color:#a1a1aa">' + (Format-HtmlTexto $etiqueta) + '</td>' +
         '<td align="right" style="padding:8px 0;font-size:14px;font-weight:600;color:' + (Get-ColorHtml $color) + '">' +
         (Format-HtmlTexto $valor).Replace(' -&gt; ', ' &rarr; ') + '</td></tr></table>')
 }
 
-# Linea con estado: OK (verde), AVISO (amarillo) o NA (gris, dato no disponible)
+# Linea con estado: OK (verde), AVISO (amarillo), INFO (gris claro, solo informa: no cuenta como aviso)
+# o NA (gris, dato no disponible)
 function Write-Estado($nivel, $etiqueta, $valor) {
     $marca, $color, $textoPastilla, $fondo, $tinta = switch ($nivel) {
-        'OK'    { ' OK ', 'Green',    'OK',    '#dcfce7', '#15803d' }
-        'AVISO' { ' !! ', 'Yellow',   'AVISO', '#fef9c3', '#a16207' }
-        default { ' -- ', 'DarkGray', 'N/D',   '#f1f5f9', '#64748b' }
+        'OK'    { ' OK ', 'Green',    'OK',    '#0d2b19', '#4ade80' }
+        'AVISO' { ' !! ', 'Yellow',   'AVISO', '#2e2606', '#facc15' }
+        'INFO'  { ' i  ', 'Gray',     'INFO',  '#1c1c21', '#d4d4d8' }
+        default { ' -- ', 'DarkGray', 'N/D',   '#1f1f24', '#8b8b94' }
     }
     if ($nivel -eq 'AVISO') { $script:avisosResumen++ }
     Out-Resumen ('    [' + $marca + '] ' + "$etiqueta ".PadRight(24, '.') + ' ' + $valor) $color
 
     # En el correo: pastilla de color + etiqueta, y el detalle debajo (se lee bien en pantallas angostas)
-    Add-Html ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #f1f5f9"><tr>' +
+    Add-Html ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid ' + $script:lineaHtml + '"><tr>' +
         '<td width="64" valign="top" style="padding:9px 0">' +
         '<span style="display:inline-block;min-width:44px;text-align:center;padding:2px 8px;border-radius:999px;' +
         'font-size:11px;font-weight:700;background:' + $fondo + ';color:' + $tinta + '">' + $textoPastilla + '</span></td>' +
         '<td style="padding:8px 0">' +
-        '<div style="font-size:14px;font-weight:600;color:#0f172a">' + (Format-HtmlTexto $etiqueta) + '</div>' +
-        '<div style="font-size:13px;color:#475569;margin-top:2px">' + (Format-HtmlTexto $valor) + '</div>' +
+        '<div style="font-size:14px;font-weight:600;color:#f4f4f5">' + (Format-HtmlTexto $etiqueta) + '</div>' +
+        '<div style="font-size:13px;color:#a1a1aa;margin-top:2px">' + (Format-HtmlTexto $valor) + '</div>' +
         '</td></tr></table>')
 }
 
@@ -138,7 +149,7 @@ function Write-Lista($nombres) {
     Add-Html '<div style="padding:6px 0 2px">'
     foreach ($n in $nombres) {
         Add-Html ('<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:999px;' +
-            'background:#f1f5f9;color:#0f172a;font-size:13px">' + (Format-HtmlTexto $n) + '</span>')
+            'background:#1c1c21;border:1px solid #2e2e35;color:#f4f4f5;font-size:13px">' + (Format-HtmlTexto $n) + '</span>')
     }
     Add-Html '</div>'
 }
@@ -162,63 +173,15 @@ function Write-TablaApps($titulo, $apps, $color, [switch]$ConMotivo) {
         # El motivo va en rojo solo si es un error; si no (ej. "se actualiza sola"), en gris
         $motivo = ''
         if ($ConMotivo -and $a.Motivo) {
-            $colorMotivo = if ($color -eq 'Red') { '#b91c1c' } else { '#64748b' }
+            $colorMotivo = if ($color -eq 'Red') { $script:coloresHtml['Red'] } else { $script:coloresHtml['DarkGray'] }
             $motivo = '<div style="font-size:12px;color:' + $colorMotivo + ';margin-top:2px">' + (Format-HtmlTexto $a.Motivo) + '</div>'
         }
-        Add-Html ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #f1f5f9"><tr>' +
+        Add-Html ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid ' + $script:lineaHtml + '"><tr>' +
             '<td style="padding:7px 0">' +
-            '<div style="font-size:14px;color:#0f172a">' + (Format-HtmlTexto $a.Nombre) + '</div>' +
-            '<div style="font-size:12px;color:#64748b;margin-top:1px">' + (Format-HtmlTexto $a.Instalada) + ' &rarr; ' +
+            '<div style="font-size:14px;color:#f4f4f5">' + (Format-HtmlTexto $a.Nombre) + '</div>' +
+            '<div style="font-size:12px;color:#8b8b94;margin-top:1px">' + (Format-HtmlTexto $a.Instalada) + ' &rarr; ' +
             (Format-HtmlTexto $a.Disponible) + '</div>' + $motivo +
             '</td></tr></table>')
-    }
-}
-
-# --- Datos ---
-
-# Lee el estado de WinRE de la salida de "reagentc /info". Solo mira la linea del estado
-# ("Windows RE status: Enabled" / "Estado de Windows RE: Enabled"), no el resto del texto.
-# Devuelve $true, $false o $null si no se reconoce.
-function Get-EstadoWinRE($texto) {
-    foreach ($linea in "$texto" -split "`n") {
-        if ($linea -match '(status|estado)[^:]*:\s*(\S+)') {
-            if ($Matches[2] -match '^(Enabled|Habilitado)$') { return $true }
-            if ($Matches[2] -match '^(Disabled|Deshabilitado)$') { return $false }
-        }
-    }
-    return $null
-}
-
-# Datos de salud del equipo. Lo que requiere administrador queda en $null si no lo es.
-function Get-SaludEquipo($discoC, $esAdmin) {
-    # Bateria (solo portatiles): capacidad actual frente a la de fabrica, segun el informe de Windows
-    $bateria = $null
-    if (Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue) {
-        $xml = Join-Path $env:TEMP 'bateria_limpieza.xml'
-        powercfg /batteryreport /xml /output $xml | Out-Null
-        try {
-            $b = ([xml](Get-Content $xml -Raw)).BatteryReport.Batteries.Battery | Select-Object -First 1
-            if ([double]$b.DesignCapacity -gt 0) {
-                $bateria = [pscustomobject]@{
-                    Salud  = [math]::Round(100 * [double]$b.FullChargeCapacity / [double]$b.DesignCapacity)
-                    Ciclos = $b.CycleCount
-                }
-            }
-        } catch { }
-        Remove-Item $xml -ErrorAction SilentlyContinue
-    }
-
-    $winre = $null
-    if ($esAdmin) {
-        $winre = Get-EstadoWinRE ((& reagentc.exe /info 2>$null) -join "`n")
-    }
-
-    [pscustomobject]@{
-        Bateria           = $bateria
-        Fiabilidad        = if ($esAdmin) { $discoC | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue } else { $null }
-        WinRE             = $winre
-        ReinicioPendiente = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
-                            (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
     }
 }
 
@@ -226,9 +189,11 @@ function Get-SaludEquipo($discoC, $esAdmin) {
 
 # Muestra el resumen. $d es un hashtable con los datos que junta limpiar.ps1.
 function Show-Resumen($d) {
-    $salud = Get-SaludEquipo $d.DiscoC $d.EsAdmin
+    $salud = $d.Salud   # lo junta Get-SaludEquipo (lib\salud.ps1) en el paso 16
 
-    Write-Cabecera 'RESUMEN DE LA LIMPIEZA' ("$env:COMPUTERNAME - " + (Get-Date -Format 'dd/MM/yyyy HH:mm'))
+    $subtitulo = $env:COMPUTERNAME
+    if ($salud.Version) { $subtitulo += " - $($salud.Version.Nombre)" }
+    Write-Cabecera 'RESUMEN DE LA LIMPIEZA' ("$subtitulo - " + (Get-Date -Format 'dd/MM/yyyy HH:mm'))
 
     # --- Espacio ---
     Write-Seccion 'ESPACIO'
@@ -251,6 +216,22 @@ function Show-Resumen($d) {
     } else {
         Write-Dato 'Limpieza anterior' 'esta es la primera registrada' DarkGray
     }
+    # A que ritmo se llena C: aunque se limpie (historial de los ultimos meses)
+    $t = $d.Tendencia
+    if ($t) {
+        if ($t.GBPorMes -gt 0.1) {
+            $textoTendencia = 'pierdes {0:N1} GB al mes' -f $t.GBPorMes
+            if ($t.Meses) {
+                $meses = [math]::Round($t.Meses)
+                if ($meses -le 24) { $textoTendencia += "; bajaria del 15 % libre en ~$([math]::Max(1, $meses)) mes(es)" }
+            }
+            $colorTendencia = if ($t.Meses -and $t.Meses -le 3) { 'Yellow' } else { 'White' }
+            Write-Dato 'Tendencia' $textoTendencia $colorTendencia
+        } else {
+            # Si el espacio libre sube es por archivos borrados a mano, no por una tendencia: no se da una cifra
+            Write-Dato 'Tendencia' 'no se esta llenando' Green
+        }
+    }
     # Docker: lo que libera queda dentro de su disco virtual; vuelve a Windows al compactar
     if ($d.DockerInstalado -and $d.EsAdmin) {
         if ($d.DockerActivo) {
@@ -265,7 +246,7 @@ function Show-Resumen($d) {
         else { Write-Dato "Disco virtual $($c.Nombre)" 'no se pudo compactar (ver log)' Red }
     }
 
-    # --- Salud del equipo ---
+    # --- Salud del equipo (hardware) ---
     Write-Seccion 'SALUD DEL EQUIPO'
     $textoDisco = "$($d.DiscoC.HealthStatus)"
     $nivelDisco = if ($d.DiscoC.HealthStatus -eq 'Healthy') { 'OK' } else { 'AVISO' }
@@ -280,7 +261,26 @@ function Show-Resumen($d) {
         # empieza a protegerse cerca de 80 C. Con un umbral mas bajo habria avisos falsos.
         if ($f.Temperature -ge 80) { $nivelDisco = 'AVISO' }
     }
+    if ($f -and $f.PowerOnHours) { $textoDisco += ' | {0:N0} h de uso' -f $f.PowerOnHours }
+    # Errores de lectura que el disco no pudo corregir: la senal mas clara de que esta fallando
+    if ($f -and $f.ReadErrorsUncorrected -gt 0) {
+        $textoDisco += " | $($f.ReadErrorsUncorrected) error(es) de lectura: haz copia de tus archivos"
+        $nivelDisco = 'AVISO'
+    }
     Write-Estado $nivelDisco "Disco ($($d.DiscoC.MediaType))" $textoDisco
+
+    # Revision en linea del sistema de archivos (Repair-Volume -Scan, solo administrador)
+    if (-not $d.EsAdmin) { Write-Estado 'NA' 'Sistema de archivos' 'solo se revisa como administrador' }
+    elseif (-not $salud.SistemaArchivos) { Write-Estado 'NA' 'Sistema de archivos' 'no se pudo revisar (ver log)' }
+    elseif ($salud.SistemaArchivos -eq 'NoErrorsFound') { Write-Estado 'OK' 'Sistema de archivos' 'sin errores' }
+    elseif ($salud.SistemaArchivos -match 'SpotFix') {
+        # Lo que necesita SpotFix es por definicion menor (una entrada de indice, un vinculo): no es un fallo del
+        # disco, que se vigila aparte con sus contadores. Solo informa, para no repetir un aviso que a veces no se
+        # puede resolver enseguida (25/11/2026: chkdsk.exe no abria en una version de prueba de Windows)
+        Write-Estado 'INFO' 'Sistema de archivos' "error menor pendiente (detalle en el log); se corrige con 'chkdsk C: /spotfix' como admin y reiniciando"
+    }
+    elseif ($salud.SistemaArchivos -match 'Fixed') { Write-Estado 'OK' 'Sistema de archivos' 'errores menores, ya corregidos en linea' }
+    else { Write-Estado 'AVISO' 'Sistema de archivos' "errores ($($salud.SistemaArchivos)): como admin, 'chkdsk C: /f' (S) y reiniciar" }
 
     # Poco espacio: con menos del 15 % libre Windows y las actualizaciones empiezan a tener problemas
     if ($d.TamanoC -gt 0) {
@@ -294,6 +294,97 @@ function Show-Resumen($d) {
     if ($salud.Bateria) {
         $nivel = if ($salud.Bateria.Salud -ge 80) { 'OK' } else { 'AVISO' }
         Write-Estado $nivel 'Bateria' "$($salud.Bateria.Salud)% de la capacidad original ($($salud.Bateria.Ciclos) ciclos)"
+    }
+
+    # Errores de hardware (WHEA): los graves siempre avisan; los corregidos solo si son muchos
+    $h = $salud.Hardware
+    if ($null -eq $h) { Write-Estado 'NA' 'Hardware (30 dias)' 'no se pudo leer el registro de eventos' }
+    elseif ($h.Graves -gt 0) {
+        Write-Estado 'AVISO' 'Hardware (30 dias)' ("$($h.Graves) error(es) grave(s) de RAM/CPU/disco; ultimo {0:dd/MM HH:mm}" -f $h.Ultimo)
+    }
+    elseif ($h.Corregidos -ge 10) {
+        Write-Estado 'AVISO' 'Hardware (30 dias)' "$($h.Corregidos) errores corregidos: puede ser la RAM o un driver"
+    }
+    elseif ($h.Corregidos -gt 0) { Write-Estado 'OK' 'Hardware (30 dias)' "$($h.Corregidos) error(es) corregido(s), pocos: normal" }
+    else { Write-Estado 'OK' 'Hardware (30 dias)' 'sin errores' }
+
+    $c = $salud.Cuelgues
+    if ($null -eq $c) { Write-Estado 'NA' 'Cuelgues (30 dias)' 'no se pudo leer el registro de eventos' }
+    elseif ($c.Pantallazos + $c.OtrosApagados -eq 0) { Write-Estado 'OK' 'Cuelgues (30 dias)' 'ningun pantallazo azul ni apagado inesperado' }
+    else {
+        $partes = @()
+        if ($c.Pantallazos) { $partes += "$($c.Pantallazos) pantallazo(s) azul(es)" }
+        if ($c.OtrosApagados) { $partes += "$($c.OtrosApagados) apagado(s) inesperado(s)" }
+        Write-Estado 'AVISO' 'Cuelgues (30 dias)' (($partes -join ' y ') + ('; ultimo {0:dd/MM HH:mm}' -f $c.Ultimo))
+    }
+
+    # --- Windows y seguridad ---
+    Write-Seccion 'WINDOWS Y SEGURIDAD'
+    $wu = $salud.WindowsUpdate
+    if (-not $wu -or $wu.Error) { Write-Estado 'NA' 'Windows Update' 'no se pudo consultar (ver log)' }
+    else {
+        $partes = @()
+        $partes += if ($wu.Pendientes) { "$($wu.Pendientes.Count) pendiente(s)" } else { 'al dia' }
+        if ($wu.UltimaInstalada) { $partes += 'ultima instalada ' + (Format-Hace $wu.UltimaInstalada) }
+        $nivelWu = 'OK'
+        if ($wu.Fallidas) { $nivelWu = 'AVISO'; $partes += "$($wu.Fallidas.Count) fallaron (ver log)" }
+        # Windows instala solo cada mes: mas de 45 dias sin nada indica que algo lo esta frenando
+        if (-not $wu.UltimaInstalada -or ((Get-Date) - $wu.UltimaInstalada).TotalDays -gt 45) {
+            $nivelWu = 'AVISO'; $partes += 'revisa Configuracion > Windows Update'
+        }
+        Write-Estado $nivelWu 'Windows Update' ($partes -join '; ')
+        if ($wu.Opcionales) { Write-Nota "$($wu.Opcionales.Count) actualizacion(es) opcional(es) disponibles (drivers, vistas previas): ver log" }
+    }
+
+    $av = $salud.Defender
+    if (-not $av) { Write-Estado 'NA' 'Antivirus (Defender)' 'no se pudo leer su estado' }
+    elseif ($av.Modo -ne 'Normal') { Write-Estado 'NA' 'Antivirus (Defender)' "en modo '$($av.Modo)': otro antivirus estaria protegiendo el equipo" }
+    elseif (-not $av.TiempoReal) { Write-Estado 'AVISO' 'Antivirus (Defender)' 'la proteccion en tiempo real esta DESACTIVADA' }
+    elseif ($av.DiasFirmas -gt 7) {
+        $hace = if ($av.DiasFirmas -ge 65535) { 'nunca se actualizaron' } else { "son de hace $($av.DiasFirmas) dias" }
+        Write-Estado 'AVISO' 'Antivirus (Defender)' "activo, pero sus firmas $hace"
+    }
+    else { Write-Estado 'OK' 'Antivirus (Defender)' ('activo, firmas al dia ({0:dd/MM HH:mm})' -f $av.FechaFirmas) }
+
+    # Firewall, UAC y Arranque seguro avisan si estan apagados; el cifrado del disco solo se informa
+    $s = $salud.Seguridad
+    $apagado = @()
+    if ($s.FirewallApagado) { $apagado += "firewall de red $($s.FirewallApagado -join '/')" }
+    if (-not $s.UacActivo) { $apagado += 'control de cuentas (UAC)' }
+    if ($s.ArranqueSeguro -eq $false) { $apagado += 'Arranque seguro' }
+    $cifradoTexto = switch ($s.DiscoCifrado) { $true { 'C: cifrado' } $false { 'C: sin cifrar' } default { $null } }
+    if ($apagado) {
+        Write-Estado 'AVISO' 'Seguridad' ('desactivado: ' + ($apagado -join ', '))
+    } elseif (-not $s.FirewallLeido) {
+        Write-Estado 'NA' 'Seguridad' 'no se pudo leer el firewall'
+    } else {
+        $textoSeg = 'firewall, UAC' + $(if ($s.ArranqueSeguro) { ' y Arranque seguro' } else { '' }) + ' activos'
+        if ($cifradoTexto) { $textoSeg += "; $cifradoTexto" }
+        Write-Estado 'OK' 'Seguridad' $textoSeg
+    }
+
+    # Respaldo de Documentos y Escritorio (OneDrive o Historial de archivos)
+    $r = $salud.Respaldo
+    if ($r.EnOneDrive.Count -eq 2 -and $r.OneDriveAbierto) { Write-Estado 'OK' 'Respaldo de archivos' 'Documentos y Escritorio en OneDrive' }
+    # Lo demas solo informa (INFO, no cuenta como aviso): el usuario puede respaldar de otra forma
+    elseif ($r.EnOneDrive -and -not $r.OneDriveAbierto) { Write-Estado 'INFO' 'Respaldo de archivos' 'OneDrive esta cerrado: no esta sincronizando' }
+    elseif ($r.HistorialArchivos) { Write-Estado 'OK' 'Respaldo de archivos' 'Historial de archivos configurado' }
+    elseif ($r.EnOneDrive) { Write-Estado 'INFO' 'Respaldo de archivos' "solo $($r.EnOneDrive -join ' y ') en OneDrive" }
+    else { Write-Estado 'INFO' 'Respaldo de archivos' 'Documentos y Escritorio sin OneDrive ni Historial de archivos' }
+
+    if ($d.EsAdmin) {
+        if ($r.UltimoPunto) { Write-Estado 'OK' 'Punto de restauracion' ('el mas reciente {0} ({1:dd/MM})' -f (Format-Hace $r.UltimoPunto), $r.UltimoPunto) }
+        else { Write-Estado 'AVISO' 'Punto de restauracion' 'no hay ninguno: activa la Proteccion del sistema en C:' }
+    }
+
+    if ($salud.UltimoArranque) {
+        $textoArranque = '{0} ({1:dd/MM HH:mm})' -f (Format-Hace $salud.UltimoArranque), $salud.UltimoArranque
+        if (((Get-Date) - $salud.UltimoArranque).TotalDays -gt 14) {
+            # Con el Inicio rapido, Apagar no cuenta como reinicio
+            Write-Estado 'AVISO' 'Ultimo reinicio' "$($textoArranque): usa Reiniciar, no Apagar"
+        } else {
+            Write-Estado 'OK' 'Ultimo reinicio' $textoArranque
+        }
     }
 
     if (-not $d.EsAdmin) { Write-Estado 'NA' 'Recuperacion (WinRE)' 'solo se revisa como administrador' }
@@ -336,13 +427,16 @@ function Show-Resumen($d) {
 # Documento HTML del correo. Ancho maximo 600 px (el estandar de los correos) y 100 % en el celular.
 function Get-ResumenHtml($pie) {
     '<!doctype html><html><head><meta charset="utf-8">' +
-    '<meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
-    '<body style="margin:0;padding:0;background:#f1f5f9">' +
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9"><tr>' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    # Ya es oscuro: que el modo oscuro del cliente de correo no invierta los colores
+    '<meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"></head>' +
+    '<body style="margin:0;padding:0;background:' + $script:fondoHtml + '">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="' + $script:fondoHtml + '" ' +
+    'style="background:' + $script:fondoHtml + '"><tr>' +
     '<td align="center" style="padding:16px 10px">' +
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
-    'style="max-width:600px;font-family:' + $script:fuenteHtml + ';color:#0f172a">' +
+    'style="max-width:600px;font-family:' + $script:fuenteHtml + ';color:#f4f4f5">' +
     $script:resumenHtml.ToString() +
-    '<tr><td style="padding:14px 4px 0;font-size:12px;color:#64748b;text-align:center">' + (Format-HtmlTexto $pie) + '</td></tr>' +
+    '<tr><td style="padding:14px 4px 0;font-size:12px;color:#6b6b74;text-align:center">' + (Format-HtmlTexto $pie) + '</td></tr>' +
     '</table></td></tr></table></body></html>'
 }
