@@ -7,10 +7,9 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 | Archivo | Para que sirve |
 |---|---|
 | `limpiar.bat` | El que se ejecuta con **doble clic**. Pide permisos de administrador (UAC) y lanza el script. |
-| `crear-acceso-directo.bat` | Doble clic: crea en el Escritorio el acceso directo `Limpieza Windows` a `limpiar.bat` con el icono de la escoba (negro con rojo neon) y le pone ese icono a la carpeta del script. Si mueves la carpeta, vuelve a ejecutarlo (el acceso directo guarda rutas completas). No necesita permisos de administrador. |
+| `crear-acceso-directo.bat` | Doble clic: crea en el Escritorio el acceso directo `Limpieza Windows` a `limpiar.bat` con el icono de la escoba (negro con rojo neon). Si mueves la carpeta, vuelve a ejecutarlo (el acceso directo guarda rutas completas). No necesita permisos de administrador. |
 | `crear-acceso-directo.ps1` | Lo que hace `crear-acceso-directo.bat`. No hace falta abrirlo: el `.bat` lo ejecuta sin que falle por la politica de ejecucion de scripts de Windows. |
-| `limpiar.ico` | Icono del acceso directo y de la carpeta. Windows no deja que un `.bat` tenga icono propio (todos los `.bat` muestran el mismo), por eso `limpiar.bat` se ve con el icono normal en el Explorador. |
-| `desktop.ini` | Archivo oculto que le pone la escoba a la carpeta. Lo crea `crear-acceso-directo.bat`. |
+| `limpiar.ico` | Icono del acceso directo. Windows no deja que un `.bat` tenga icono propio (todos los `.bat` muestran el mismo), por eso `limpiar.bat` se ve con el icono normal en el Explorador. |
 | `limpiar.ps1` | Los pasos de la limpieza (PowerShell). |
 | `lib\resumen.ps1` | El resumen final: lo muestra en pantalla y arma la version HTML para el correo. |
 | `lib\salud.ps1` | Los datos de salud del equipo para el resumen (Windows Update, disco, errores de hardware, seguridad, respaldo...). Solo lee, no cambia nada. |
@@ -25,7 +24,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 | `.githooks\pre-commit` | Ejecuta `verificar.ps1` antes de cada commit. |
 | `memory-global\` | Notas y reglas para Claude Code (el asistente con el que se mantiene el script). El script no las usa; puedes ignorar la carpeta. |
 
-`correo.json`, `limpieza.log`, `historial.csv`, `desktop.ini` y el acceso directo (`.lnk`) son de cada equipo y estan en `.gitignore`: nunca se suben al repositorio.
+`correo.json`, `limpieza.log`, `historial.csv` y el acceso directo (`.lnk`) son de cada equipo y estan en `.gitignore`: nunca se suben al repositorio.
 
 ## Requisitos
 
@@ -47,7 +46,6 @@ No se instala nada: es una carpeta que se copia y se ejecuta. No crea servicios 
 | `limpieza.log` | En la carpeta, se reemplaza en cada ejecucion | 30-300 KB |
 | `historial.csv` | En la carpeta, guarda las ultimas 200 ejecuciones | 10 KB como maximo |
 | Acceso directo `Limpieza Windows` (opcional) | Escritorio | 2 KB |
-| `desktop.ini` (opcional, con el acceso directo) | En la carpeta, oculto. La carpeta queda marcada como de solo lectura: es la marca que usa Windows para leer su icono y no impide escribir en ella | Menos de 1 KB |
 | Puntos de restauracion | Los de Windows (Proteccion del sistema) | Se conservan solo los 2 mas recientes (paso 15) |
 
 Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Windows (`StateFlags0042` en el registro), y lo quita al terminar. Si la ejecucion se corta, la siguiente lo quita al empezar.
@@ -74,7 +72,7 @@ Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Win
    | `para` | Con el remitente `onboarding@resend.dev`, solo el correo con el que creaste la cuenta de Resend |
 
    Puedes usar el mismo `correo.json` en varios equipos: el asunto lleva el nombre de cada equipo.
-4. **Acceso directo e icono de la carpeta (opcional)**: doble clic en `crear-acceso-directo.bat`. Si el Explorador sigue mostrando la carpeta normal, presiona F5 o espera unos segundos.
+4. **Acceso directo (opcional)**: doble clic en `crear-acceso-directo.bat`. Crea en el Escritorio `Limpieza Windows` con el icono de la escoba.
 5. **Primera ejecucion**: doble clic en `limpiar.bat` (o en el acceso directo). Para la primera, conviene responder N a la reparacion (tarda) y revisar el resumen y `limpieza.log` al terminar.
 
 ### Que se copia de un equipo a otro
@@ -86,11 +84,10 @@ Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Win
 | `historial.csv` | No | Es el historial de **ese** equipo: copiado, la tendencia del espacio y la "limpieza anterior" del resumen serian de otro disco |
 | `limpieza.log` | No | Es la ultima ejecucion de ese equipo |
 | `Limpieza Windows.lnk` | No | Guarda la ruta de la carpeta en el otro equipo: vuelve a crearlo con el paso 4 |
-| `desktop.ini` | No hace falta | El paso 4 lo crea en cada equipo |
 
 ## Como usarlo
 
-1. Doble clic en `limpiar.bat`. Opcional: doble clic una vez en `crear-acceso-directo.bat` para tener en el Escritorio un acceso directo con el icono, y el mismo icono en la carpeta.
+1. Doble clic en `limpiar.bat`. Opcional: doble clic una vez en `crear-acceso-directo.bat` para tener en el Escritorio un acceso directo con el icono.
 2. Acepta la ventana de permisos de administrador.
 3. Responde las preguntas del inicio.
 4. Espera a que aparezca el resumen y presiona **Enter** para cerrar. Ninguna otra tecla cierra la ventana, y las teclas presionadas durante la ejecucion se descartan.
@@ -266,7 +263,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
-- **2026-11-26** - Nuevo `crear-acceso-directo.bat`: el acceso directo ahora se crea con doble clic (antes, `crear-acceso-directo.ps1` con *Ejecutar con PowerShell* a veces fallaba por la politica de ejecucion de scripts). Tambien le pone el icono de la escoba a la carpeta del script (`desktop.ini`, con una ruta relativa: si mueves la carpeta, el icono sigue). `limpiar.bat` sigue sin icono propio: Windows no lo permite en un `.bat`
+- **2026-11-26** - Nuevo `crear-acceso-directo.bat`: el acceso directo ahora se crea con doble clic (antes, `crear-acceso-directo.ps1` con *Ejecutar con PowerShell* a veces fallaba por la politica de ejecucion de scripts). `limpiar.bat` sigue sin icono propio en el Explorador: Windows no lo permite en un `.bat`, por eso el icono va en el acceso directo
 - **2026-11-26** - Nueva carpeta `memory-global\` con las notas y reglas de Claude Code que valen en cualquier equipo, para que esten iguales en todos. Lo de cada equipo queda fuera del repositorio. El script no cambia
 - **2026-11-26** - README: nueva seccion "Instalacion en otro equipo" (que ocupa, pasos para descargarlo y desbloquearlo, como llenar `correo.json` con la API key de Resend y que archivos se copian o no entre equipos) y comandos para correr las pruebas en "Si modificas el script". El script no cambia
 - **2026-11-26** - Pruebas automaticas: nuevo `verificar.ps1`, que revisa la sintaxis, que los `.ps1` sean solo ASCII y corre las pruebas de `tests\` (Pester), mas un hook de git que lo ejecuta antes de cada commit. La lectura de la tabla de winget (paso 16) y de la simulacion de apt (paso 12) quedo en funciones aparte (`ConvertFrom-TablaWinget` y `ConvertFrom-SimulacionApt`) para poder probarla con salidas de ejemplo. El script hace exactamente lo mismo que antes
