@@ -118,3 +118,26 @@ Describe 'Get-Columna' {
         Get-Columna 'Git   2.45.1' 6 40 | Should Be '2.45.1'
     }
 }
+
+Describe 'ConvertFrom-RespuestaSiNo (preguntas del inicio)' {
+    It 'S / si en mayusculas o minusculas, con espacios' {
+        ConvertFrom-RespuestaSiNo 's' | Should Be 'S'
+        ConvertFrom-RespuestaSiNo ' SI ' | Should Be 'S'
+    }
+    It 'N / no / Enter vacio = N' {
+        ConvertFrom-RespuestaSiNo 'n' | Should Be 'N'
+        ConvertFrom-RespuestaSiNo 'NO' | Should Be 'N'
+        ConvertFrom-RespuestaSiNo '' | Should Be 'N'
+        ConvertFrom-RespuestaSiNo $null | Should Be 'N'
+    }
+    It 'T / todas / todo = si a todas' {
+        ConvertFrom-RespuestaSiNo 't' | Should Be 'T'
+        ConvertFrom-RespuestaSiNo 'Todas' | Should Be 'T'
+        ConvertFrom-RespuestaSiNo 'todo' | Should Be 'T'
+    }
+    It 'otra respuesta no es valida' {
+        ConvertFrom-RespuestaSiNo 'sii' | Should BeNullOrEmpty
+        ConvertFrom-RespuestaSiNo 'x' | Should BeNullOrEmpty
+        ConvertFrom-RespuestaSiNo 'si a todas' | Should BeNullOrEmpty
+    }
+}

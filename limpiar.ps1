@@ -535,18 +535,31 @@ if ($esAdmin) {
         Detalle = @('Algunas apps pueden cerrarse mientras se actualizan.') })
 }
 
-# Tarjeta de una pregunta S/N. Enter sin escribir nada = No; otra respuesta se vuelve a preguntar.
+# Interpreta una respuesta: 'S', 'N' (Enter = N), 'T' (si a esta y a todas las que faltan) o $null (no valida).
+function ConvertFrom-RespuestaSiNo($texto) {
+    $resp = "$texto".Trim()
+    if ($resp -match '^(s|si)$') { return 'S' }
+    if ($resp -match '^(n|no)?$') { return 'N' }
+    if ($resp -match '^(t|todas?|todo)$') { return 'T' }
+    return $null
+}
+
+# Tarjeta de una pregunta S/N/T. Enter sin escribir nada = No; otra respuesta se vuelve a preguntar.
+# Con -SiATodas la tarjeta se muestra igual (para que quede a la vista y en el log), pero sin preguntar.
 # La respuesta se repite en su propia linea porque lo que se escribe en Read-Host no queda en el log.
-function Read-SiNo($pregunta, $numero, $cantidad) {
+function Read-SiNo($pregunta, $numero, $cantidad, [switch]$SiATodas) {
     Write-Host ''
     Write-Host ('  [{0}/{1}] {2}' -f $numero, $cantidad, $pregunta.Titulo) -ForegroundColor White
     foreach ($linea in $pregunta.Detalle) { Write-Host "        $linea" -ForegroundColor DarkGray }
+    if ($SiATodas) { Write-Host '        -> SI (todas)' -ForegroundColor Green; return 'S' }
+    $opciones = if ($cantidad -gt 1) { '        S/N, T = si a todas (Enter = N)' } else { '        S/N (Enter = N)' }
     while ($true) {
         # "$(...)": si Read-Host no devuelve nada (entrada cerrada) se toma como vacio = No, sin error
-        $resp = "$(Read-Host '        S/N (Enter = N)')".Trim()
-        if ($resp -match '^(s|si)$') { Write-Host '        -> SI' -ForegroundColor Green; return $true }
-        if ($resp -match '^(n|no)?$') { Write-Host '        -> NO' -ForegroundColor DarkGray; return $false }
-        Write-Host '        Respuesta no valida: escribe S o N' -ForegroundColor Yellow
+        $resp = ConvertFrom-RespuestaSiNo "$(Read-Host $opciones)"
+        if ($resp -eq 'S') { Write-Host '        -> SI' -ForegroundColor Green; return 'S' }
+        if ($resp -eq 'T') { Write-Host '        -> SI (y a todas las que faltan)' -ForegroundColor Green; return 'T' }
+        if ($resp -eq 'N') { Write-Host '        -> NO' -ForegroundColor DarkGray; return 'N' }
+        Write-Host '        Respuesta no valida: escribe S, N o T' -ForegroundColor Yellow
     }
 }
 
@@ -554,8 +567,11 @@ $respuestas = @{}
 if ($preguntas.Count -gt 0) {
     Write-SeccionConsola 'ANTES DE EMPEZAR'
     Write-Host "  $($preguntas.Count) pregunta(s). Despues la limpieza sigue sola, sin pedir nada mas." -ForegroundColor Gray
+    $siATodas = $false
     for ($i = 0; $i -lt $preguntas.Count; $i++) {
-        $respuestas[$preguntas[$i].Clave] = Read-SiNo $preguntas[$i] ($i + 1) $preguntas.Count
+        $resp = Read-SiNo $preguntas[$i] ($i + 1) $preguntas.Count -SiATodas:$siATodas
+        if ($resp -eq 'T') { $siATodas = $true }
+        $respuestas[$preguntas[$i].Clave] = ($resp -ne 'N')
     }
 }
 $cerrarNav = @{}
