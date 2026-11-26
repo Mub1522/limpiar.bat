@@ -57,3 +57,17 @@ Describe 'La guarda detecta lo que tiene que detectar' {
         ($c -split "`n")[0] | Should Not Match 'prune'
     }
 }
+
+Describe 'Sin permisos de administrador no se hace nada' {
+    $principal = [IO.File]::ReadAllText((Join-Path $script:raizProyecto 'limpiar.ps1'))
+    $inicioLog = [regex]::Match($principal, '(?m)^Start-Transcript').Index
+
+    It 'sale antes de empezar el log (asi no reemplaza el de la ejecucion anterior)' {
+        $guarda = [regex]::Match($principal, 'if \(-not \$esAdmin\) \{[^}]*\bexit 1\b')
+        $guarda.Success | Should Be $true
+        ($guarda.Index -lt $inicioLog) | Should Be $true
+    }
+    It 'no vuelve a tener pasos que solo corren con administrador (ya no hay modo a medias)' {
+        $principal | Should Not Match 'if \(\$esAdmin\)'
+    }
+}

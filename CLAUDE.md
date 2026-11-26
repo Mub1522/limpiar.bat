@@ -23,25 +23,27 @@ El usuario habla en español. **Todo lo que ve el usuario va en español**: cons
 
 ### 2.1 Lo que hace
 
-| Paso | Qué hace | Admin | Pregunta |
-|---|---|---|---|
-| 1 | Temporales del usuario (`%TEMP%`), solo los de más de 24 h | no | — |
-| 2 | Temporales de Windows, solo los de más de 24 h | sí | — |
-| 3 | Caché de Windows Update (detiene y reinicia `wuauserv`/`bits`) | sí | — |
-| 4 | Caché de navegadores, VS Code y apps de chat (Teams, Discord, Slack) | no | cerrar navegador o app abierta |
-| 5 | Caché de shaders de la GPU | no | — |
-| 6 | Caché de pip, npm, Yarn 1, pnpm (`store prune`) y Go; NuGet y logs de PM2 | no | NuGet y PM2 (si pasan de 50 MB) |
-| 7 | Logs CBS/DISM, informes de error (WER) y volcados de memoria | sí | — |
-| 8 | Caché de Delivery Optimization | sí | — |
-| 9 | Limpieza profunda: Liberador de espacio (restos de actualización grande) y DISM | sí | DISM; restos de actualización |
-| 10 | Reparación: punto de restauración + DISM RestoreHealth + SFC | sí | sí |
-| 11 | Docker: `prune` sin riesgo; imágenes sin usar solo si se autoriza | sí | imágenes |
-| 12 | Paquetes de Linux en WSL: `apt-get update` + `upgrade` (sin instalar ni quitar) y `apt-get clean` | sí | sí (solo si hay distros con apt) |
-| 13 | Compactar discos virtuales de WSL y Docker (`fstrim` + `diskpart`) | sí | sí |
-| 14 | TRIM del SSD | sí | — |
-| 15 | Puntos de restauración: conserva los `$maxPuntos` más recientes | sí | — |
-| 16 | Apps desactualizadas (winget): siempre lista; actualiza con admin + S | parcial | actualizar |
-| 17 | Revisión de salud, solo lectura (Windows Update, sistema de archivos, hardware, seguridad, respaldo...) | parcial | — |
+Todo corre como administrador: sin ese permiso el script no hace nada (ver 4.2).
+
+| Paso | Qué hace | Pregunta |
+|---|---|---|
+| 1 | Temporales del usuario (`%TEMP%`), solo los de más de 24 h | — |
+| 2 | Temporales de Windows, solo los de más de 24 h | — |
+| 3 | Caché de Windows Update (detiene y reinicia `wuauserv`/`bits`) | — |
+| 4 | Caché de navegadores, VS Code y apps de chat (Teams, Discord, Slack) | cerrar navegador o app abierta |
+| 5 | Caché de shaders de la GPU | — |
+| 6 | Caché de pip, npm, Yarn 1, pnpm (`store prune`) y Go; NuGet y logs de PM2 | NuGet y PM2 (si pasan de 50 MB) |
+| 7 | Logs CBS/DISM, informes de error (WER) y volcados de memoria | — |
+| 8 | Caché de Delivery Optimization | — |
+| 9 | Limpieza profunda: Liberador de espacio (restos de actualización grande) y DISM | DISM; restos de actualización |
+| 10 | Reparación: punto de restauración + DISM RestoreHealth + SFC | sí |
+| 11 | Docker: `prune` sin riesgo; imágenes sin usar solo si se autoriza | imágenes |
+| 12 | Paquetes de Linux en WSL: `apt-get update` + `upgrade` (sin instalar ni quitar) y `apt-get clean` | sí (solo si hay distros con apt) |
+| 13 | Compactar discos virtuales de WSL y Docker (`fstrim` + `diskpart`) | sí |
+| 14 | TRIM del SSD | — |
+| 15 | Puntos de restauración: conserva los `$maxPuntos` más recientes | — |
+| 16 | Apps desactualizadas (winget): siempre lista; actualiza con S | actualizar |
+| 17 | Revisión de salud, solo lectura (Windows Update, sistema de archivos, hardware, seguridad, respaldo...) | — |
 
 ### 2.2 Lo que NO hace (riesgos que no toma)
 
@@ -68,7 +70,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 
 - **Nunca ejecutar `limpiar.ps1` ni `limpiar.bat`.** Borran archivos, detienen servicios, actualizan apps y piden UAC. El usuario lo ejecuta y después pide "validar/revisar el log" (`limpieza.log`, que se sobrescribe en cada ejecución).
 - **El `README.md` siempre al día y fiel al script.** Nunca debe describir algo que el script ya no hace, ni omitir algo que sí hace. En cada cambio a `limpiar.ps1`, `limpiar.bat`, `lib\*.ps1` o al formato de `correo.json`, en el mismo turno y sin que lo pidan:
-  - actualizar las secciones afectadas: archivos, preguntas, pasos y su numeración, pasos de administrador, resumen final, correo, configuración, recomendaciones y "Lo que no hace";
+  - actualizar las secciones afectadas: archivos, preguntas, pasos y su numeración, resumen final, correo, configuración, recomendaciones y "Lo que no hace";
   - agregar una entrada con fecha en "Historial de cambios" (la más reciente arriba);
   - releer el README contra el script para confirmar que nada más quedó desactualizado;
   - seguir las reglas de estructura del README (sección 10), sobre todo "Requisitos" e "Instalación en otro equipo" (10.2).
@@ -107,14 +109,15 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 
 ### 4.2 Flujo de `limpiar.ps1`
 
-1. `Start-Transcript`: el transcript **es** `limpieza.log`, y la salida de `Write-Host` también queda registrada.
-2. Carga los módulos de `lib\` con dot-sourcing.
-3. Define las funciones de apoyo y la configuración.
-4. **Inicio:** recuadro (`Write-CajaConsola`), reúne los datos que necesitan las preguntas y arma `$preguntas`, solo con las que aplican ahora. Cada pregunta tiene `Clave`, `Titulo` y `Detalle`.
-5. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no; Enter sin nada no vale y se vuelve a preguntar (lo pidió el usuario el 2026-11-26: hay que elegir); `T`/`todas` = sí a esa y a las que faltan (las tarjetas siguientes se muestran igual, con `-> SI (todas)`, para que el usuario vea qué aceptó y quede en el log), y vuelve a preguntar si la respuesta no es válida. La lectura de la respuesta está en `ConvertFrom-RespuestaSiNo` (con prueba). Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$actualizarWsl`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
-6. **Pasos 1 a 17**, sin intervención. Los que necesitan administrador van agrupados en `if ($esAdmin) { ... } else { Log "Pasos X a Y omitidos..." }`: hoy son el 2-3 y el 7-15. Al agregar pasos hay que actualizar ese mensaje. Los pasos 16 y 17 corren fuera del grupo y saltan solos sus partes de administrador.
-7. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 17, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
-8. `Stop-Transcript`. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
+1. **Sin administrador, sale** con un aviso y espera Enter, **antes** de `Start-Transcript`: así no reemplaza el log de la ejecución anterior, ni guarda historial, ni envía correo. Antes había un modo a medias (pasos 1, 4-6, 16 y 17); se quitó el 2026-11-26 a pedido del usuario porque dejaba el resumen y el historial incompletos. Casi nunca llega a pasar: `limpiar.bat` ya se cierra si se rechaza el UAC. `reglas.Tests.ps1` comprueba que la salida va antes del log y que no vuelve ningún `if ($esAdmin)`.
+2. `Start-Transcript`: el transcript **es** `limpieza.log`, y la salida de `Write-Host` también queda registrada.
+3. Carga los módulos de `lib\` con dot-sourcing.
+4. Define las funciones de apoyo y la configuración.
+5. **Inicio:** recuadro (`Write-CajaConsola`), reúne los datos que necesitan las preguntas y arma `$preguntas`, solo con las que aplican ahora. Cada pregunta tiene `Clave`, `Titulo` y `Detalle`.
+6. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no; Enter sin nada no vale y se vuelve a preguntar (lo pidió el usuario el 2026-11-26: hay que elegir); `T`/`todas` = sí a esa y a las que faltan (las tarjetas siguientes se muestran igual, con `-> SI (todas)`, para que el usuario vea qué aceptó y quede en el log), y vuelve a preguntar si la respuesta no es válida. La lectura de la respuesta está en `ConvertFrom-RespuestaSiNo` (con prueba). Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$actualizarWsl`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
+7. **Pasos 1 a 17**, sin intervención y siempre como administrador. A `Get-SaludEquipo` y `Show-Resumen` se les pasa `$true`: los módulos de `lib\` siguen aceptando `$false` para la vista previa sin permisos (8.2).
+8. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 17, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
+9. `Stop-Transcript`. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
 
 ### 4.3 Módulos de `lib\`
 
@@ -147,7 +150,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `Invoke-Herramienta` | Ejecuta dism/sfc: junta las barras de progreso (`\r`) y registra el progreso cada 10 %. `-Unicode` para la salida UTF-16 de sfc. |
 | `Invoke-LimpiezaComando` | Ejecuta el comando oficial de limpieza de una herramienta (pnpm, go) y mide lo que achicó su carpeta. |
 | `Invoke-LiberadorEspacio` | `cleanmgr /sagerun:42` solo con las categorías indicadas (marca temporal `StateFlags0042`, que se quita al terminar), con un tiempo máximo de 20 min; mide por el espacio libre del disco. |
-| `Remove-PerfilLiberador` | Quita la marca `StateFlags0042`. También se llama al inicio (con permisos de administrador) para limpiar lo que haya dejado una ejecución cortada. |
+| `Remove-PerfilLiberador` | Quita la marca `StateFlags0042`. También se llama al inicio para limpiar lo que haya dejado una ejecución cortada. |
 | `Stop-Programa` | Cierra un programa: primero sus ventanas, después a la fuerza lo que quede. |
 | `Get-CarpetasCache` | Carpetas exactamente `Cache`, `Code Cache` o `GPUCache` dentro de una app Electron/WebView2. |
 | `Get-RestosActualizacion` | `Windows.old`, `$WINDOWS.~BT` y `$WINDOWS.~WS`, con tamaño y si son recientes. |
@@ -243,7 +246,7 @@ Antes de agregar algo, comprobar que respeta la sección 2.2 y los principios de
 
 ### 7.2 Agregar un paso nuevo
 1. Preferir ampliar un paso existente: renumerar obliga a tocar el README, los mensajes y esta guía.
-2. Si es necesario, numerarlo, agregarle `Log "Paso N: ..." Yellow` y ubicarlo dentro o fuera de `if ($esAdmin)`. Actualizar el mensaje "Pasos X a Y omitidos" y la sección "Sin permisos de administrador" del README.
+2. Si es necesario, numerarlo, agregarle `Log "Paso N: ..." Yellow`. Corre siempre como administrador: no hace falta agruparlo.
 
 ### 7.3 Agregar una pregunta
 1. Reunir los datos antes de las preguntas y agregar la entrada a `$preguntas`, solo si aplica (umbral de tamaño, programa abierto, etc.).
@@ -309,7 +312,7 @@ Get-Content limpieza.log | Where-Object { $_ -notmatch '^\[\d\d:\d\d:\d\d\]   (b
 - **Nunca tocar carpetas reales:** lo que borra trabaja en `$TestDrive` (carpeta temporal de Pester). Para .NET (`[IO.File]`) usar `"$TestDrive\..."`, no `TestDrive:\`, que .NET no entiende.
 - No probar lo que necesita administrador, red o programas externos (winget, wsl, docker, el registro): se prueba su función `ConvertFrom-*` con una muestra (4.4).
 - Muestras en `tests\muestras`, en UTF-8 y con apps o paquetes genéricos: **nunca** copiar una salida de este PC con nombres de proyectos, rutas o el nombre del equipo (repo público).
-- `reglas.Tests.ps1` revisa el código **sin comentarios** contra la lista de 2.2 y las trampas de 6.1/6.2 (`volume prune`, `full-upgrade`, `-NoNewline`...). Si el usuario autoriza algo de 2.2, se quita su patrón ahí en el mismo cambio. Si se agrega algo a 2.2, se agrega su patrón.
+- `reglas.Tests.ps1` revisa el código **sin comentarios** contra la lista de 2.2 y las trampas de 6.1/6.2 (`volume prune`, `full-upgrade`, `-NoNewline`...), y que sin administrador se salga antes del log (4.2). Si el usuario autoriza algo de 2.2, se quita su patrón ahí en el mismo cambio. Si se agrega algo a 2.2, se agrega su patrón.
 - Una prueba que se escribe y pasa a la primera no prueba nada hasta que se la ve fallar: romper la función a propósito, ver que la prueba falla y deshacer el cambio. Así se hizo el 2026-11-26 con `Clear-Folder` y la regla de `volume prune`.
 
 ---

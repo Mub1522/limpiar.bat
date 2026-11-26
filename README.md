@@ -30,7 +30,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 ## Requisitos
 
 - Windows 10 u 11, instalado en C:.
-- Windows PowerShell 5.1 (viene con Windows) y permisos de administrador (se piden con la ventana de UAC).
+- Windows PowerShell 5.1 (viene con Windows) y permisos de administrador (se piden con la ventana de UAC). Son obligatorios: sin ellos el script no hace nada.
 - Lo demas es opcional: si un programa no esta (Chrome, Brave, Firefox, Teams, Discord, Slack, Docker, WSL, pip, npm, Yarn, pnpm, Go, NuGet, PM2, drivers NVIDIA/AMD), su parte simplemente no encuentra nada y se sigue. Si `winget` no esta instalado, el paso 16 lo avisa en rojo.
 - Pensado para Windows en espanol o ingles. En otros idiomas funciona igual, pero el estado de WinRE puede aparecer como "N/D".
 - Para crear puntos de restauracion (paso 10), la Proteccion del sistema tiene que estar activada en C: (`sysdm.cpl` > Proteccion del sistema). Si no lo esta, el resto funciona igual.
@@ -89,13 +89,13 @@ Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Win
 ## Como usarlo
 
 1. Doble clic en `limpiar.bat`. Opcional: doble clic una vez en `crear-acceso-directo.bat` para tener en el Escritorio un acceso directo con el icono.
-2. Acepta la ventana de permisos de administrador.
+2. Acepta la ventana de permisos de administrador. Si la rechazas, no se limpia nada.
 3. Responde las preguntas del inicio.
 4. Espera a que aparezca el resumen y presiona **Enter** para cerrar. Ninguna otra tecla cierra la ventana, y las teclas presionadas durante la ejecucion se descartan.
 
 ## Preguntas (todas al inicio)
 
-Al abrirse, el script muestra un encabezado (equipo, fecha y si corre como administrador) y luego las preguntas, cada una en su tarjeta numerada (`[1/6]`, `[2/6]`...) con una explicacion corta debajo. Solo aparecen las que aplican en ese momento. Despues de responderlas el script corre solo, sin pedir nada mas.
+Al abrirse, el script muestra un encabezado (equipo y fecha) y luego las preguntas, cada una en su tarjeta numerada (`[1/6]`, `[2/6]`...) con una explicacion corta debajo. Solo aparecen las que aplican en ese momento. Despues de responderlas el script corre solo, sin pedir nada mas.
 
 Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escribir nada no vale**: hay que elegir. Con `T` (o `todas`) se responde **si a esa y a todas las que faltan**: las tarjetas siguientes se muestran igual, ya marcadas con `-> SI (todas)`, sin preguntar. Escribirla en la primera marca todo con S. Cualquier otra respuesta se vuelve a preguntar. Debajo de cada pregunta queda la respuesta (`-> SI` / `-> NO`), tambien en el log.
 
@@ -151,7 +151,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
 ### Revision
 
-17. **Revision de salud del equipo** (solo lectura, no cambia nada; tarda alrededor de un minuto): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada), revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`, solo como administrador; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
+17. **Revision de salud del equipo** (solo lectura, no cambia nada; tarda alrededor de un minuto): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada), revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
 
 ### Resumen final
 
@@ -171,7 +171,7 @@ Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo. E
   - Antivirus (Defender): aviso si la proteccion en tiempo real esta desactivada o sus firmas tienen mas de 7 dias. Si otro antivirus esta a cargo, aparece como no disponible
   - Seguridad: aviso si estan apagados el firewall (en alguna red), el control de cuentas (UAC) o el Arranque seguro. Tambien dice si C: esta cifrado con BitLocker (solo informa)
   - Respaldo de archivos: si Documentos y Escritorio estan en OneDrive (y OneDrive abierto) o si el Historial de archivos esta configurado. Si no, solo se informa (`[ i  ]`): no cuenta como aviso, porque puedes respaldar de otra forma
-  - Punto de restauracion (solo administrador): el mas reciente; aviso si no hay ninguno
+  - Punto de restauracion: el mas reciente; aviso si no hay ninguno
   - Ultimo reinicio: aviso si pasaron mas de 14 dias. Con el Inicio rapido de Windows, Apagar no cuenta: solo Reiniciar
   - Recuperacion (WinRE): si el entorno de reparacion de Windows esta activo
   - Reinicio pendiente: si Windows espera un reinicio para terminar actualizaciones
@@ -201,7 +201,7 @@ Es opcional. Para activarlo, crea una cuenta en Resend, copia `correo.ejemplo.js
 
 ## Sin permisos de administrador
 
-Solo se hacen los pasos **1, 4, 5, 6, 16 y 17** (en el 16 solo se listan las apps, no se actualizan). Docker tampoco se limpia, y los paquetes de WSL no se actualizan. El log indica que pasos se omitieron, y en el resumen WinRE, el desgaste del SSD, el sistema de archivos, el cifrado del disco y el punto de restauracion aparecen como no disponibles.
+No se hace nada. Casi todos los pasos necesitan administrador, y una limpieza a medias dejaria el resumen y el historial incompletos. Si se rechaza el permiso, `limpiar.bat` avisa y se cierra; si `limpiar.ps1` se abre directo sin permisos, muestra un aviso y espera Enter para cerrar. En los dos casos no se toca nada: ni archivos, ni `limpieza.log` (queda el de la ejecucion anterior), ni `historial.csv`, ni se envia correo.
 
 ## Configuracion
 
@@ -257,13 +257,14 @@ Pester 3.4 viene con Windows. Si instalaste Pester 5, antes de `Invoke-Pester` c
 |---|---|
 | Sintaxis | Que `limpiar.ps1`, `lib\`, `tests\` y los demas `.ps1` se puedan leer (sin ejecutarlos). |
 | Solo ASCII | Que ningun `.ps1` tenga tildes ni simbolos: Windows PowerShell 5.1 los desfigura. |
-| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`; el borrado de carpetas (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); y que el codigo no use nada de "Lo que no hace, a proposito". |
+| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`; el borrado de carpetas (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
 | PSScriptAnalyzer | Solo si esta instalado (`Install-Module PSScriptAnalyzer -Scope CurrentUser`). Es opcional. |
 
 Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commit, activa el hook una vez en cada equipo con `git config core.hooksPath .githooks`.
 
 ## Historial de cambios
 
+- **2026-11-26** - Sin permisos de administrador el script ya no hace una limpieza a medias: avisa y se cierra sin tocar nada (ni el log, ni el historial, ni el correo). Por eso ya no hay casos con una sola pregunta.
 - **2026-11-26** - Las preguntas del inicio aceptan `T` (o `todas`): si a esa pregunta y a todas las que faltan. Las demas tarjetas se siguen mostrando (y quedan en el log) con `-> SI (todas)`. Enter sin escribir nada ya no cuenta como No: se vuelve a preguntar.
 - **2026-11-26** - `.vscode\settings.json` pasa a subirse al repositorio: VS Code se ve en negro con rojo neon (los colores del correo) en cualquier equipo. El script no cambia
 - **2026-11-26** - Nuevo `crear-acceso-directo.bat`: el acceso directo ahora se crea con doble clic (antes, `crear-acceso-directo.ps1` con *Ejecutar con PowerShell* a veces fallaba por la politica de ejecucion de scripts). `limpiar.bat` sigue sin icono propio en el Explorador: Windows no lo permite en un `.bat`, por eso el icono va en el acceso directo
