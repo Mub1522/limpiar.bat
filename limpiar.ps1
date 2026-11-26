@@ -668,8 +668,11 @@ if ($esAdmin) {
     # de la actualizacion aunque en disco ocupen mucho menos
     $libreAntes = (Get-PSDrive C).Free
     try {
-        # 6>$null: la funcion escribe "Deleting..." con Write-Host, que quedaba en el log sin hora
-        Delete-DeliveryOptimizationCache -Force -ErrorAction Stop 6>$null
+        # En otro proceso: la funcion escribe "Deleting..." con Write-Host, y en PS 5.1 el transcript lo
+        # registra sin hora aunque se redirija (6>$null no sirve). Asi su salida llega como texto.
+        $salidaDO = @(& powershell.exe -NoProfile -Command 'Delete-DeliveryOptimizationCache -Force -ErrorAction Stop' 2>&1)
+        # Si falla, solo la primera linea del error (lo demas es la ubicacion y la categoria del error)
+        if ($LASTEXITCODE -ne 0) { throw ("$(@($salidaDO | Where-Object { $_ -is [Management.Automation.ErrorRecord] })[0])".Trim()) }
         $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
         Log "  $liberado MB liberados (medido por el espacio libre del disco)" Green
         $total += $liberado
