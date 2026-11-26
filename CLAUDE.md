@@ -102,6 +102,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `tests\*.Tests.ps1` | Pruebas de Pester (ver 8.4). |
 | `tests\muestras\` | Salidas de ejemplo de winget y apt (UTF-8, sin datos de ningún equipo). |
 | `memory-global\` | Memoria de Claude Code que vale en cualquier PC (ver 11). No la usa el script. |
+| `.vscode\settings.json` | Colores de VS Code (negro con rojo neón, la paleta de `lib\resumen.ps1`). Se versiona para que todos los PCs del usuario se vean igual (2026-11-26): no poner ahí rutas ni datos de un PC. |
 | `.githooks\pre-commit` | Corre `verificar.ps1` antes de cada commit. Se activa por equipo con `git config core.hooksPath .githooks`; va en LF (`.gitattributes`) porque lo ejecuta `sh`. |
 
 ### 4.2 Flujo de `limpiar.ps1`

@@ -22,6 +22,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 | `verificar.ps1` | Solo para quien modifica el script: revisa la sintaxis, que los `.ps1` sean solo ASCII y corre las pruebas. No limpia nada (ver "Si modificas el script"). |
 | `tests\` | Pruebas automaticas (Pester) y, en `tests\muestras`, salidas de ejemplo de winget y apt sin datos de ningun equipo. |
 | `.githooks\pre-commit` | Ejecuta `verificar.ps1` antes de cada commit. |
+| `.vscode\settings.json` | Colores de VS Code para esta carpeta (negro con rojo neon, como el correo). Solo cambia como se ve el editor. |
 | `memory-global\` | Notas y reglas para Claude Code (el asistente con el que se mantiene el script). El script no las usa; puedes ignorar la carpeta. |
 
 `correo.json`, `limpieza.log`, `historial.csv` y el acceso directo (`.lnk`) son de cada equipo y estan en `.gitignore`: nunca se suben al repositorio.
@@ -263,6 +264,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-26** - `.vscode\settings.json` pasa a subirse al repositorio: VS Code se ve en negro con rojo neon (los colores del correo) en cualquier equipo. El script no cambia
 - **2026-11-26** - Nuevo `crear-acceso-directo.bat`: el acceso directo ahora se crea con doble clic (antes, `crear-acceso-directo.ps1` con *Ejecutar con PowerShell* a veces fallaba por la politica de ejecucion de scripts). `limpiar.bat` sigue sin icono propio en el Explorador: Windows no lo permite en un `.bat`, por eso el icono va en el acceso directo
 - **2026-11-26** - Nueva carpeta `memory-global\` con las notas y reglas de Claude Code que valen en cualquier equipo, para que esten iguales en todos. Lo de cada equipo queda fuera del repositorio. El script no cambia
 - **2026-11-26** - README: nueva seccion "Instalacion en otro equipo" (que ocupa, pasos para descargarlo y desbloquearlo, como llenar `correo.json` con la API key de Resend y que archivos se copian o no entre equipos) y comandos para correr las pruebas en "Si modificas el script". El script no cambia
