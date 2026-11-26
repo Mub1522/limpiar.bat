@@ -7,3 +7,6 @@ historial.csv
 
 # Acceso directo: guarda rutas completas de cada equipo (se crea con crear-acceso-directo.ps1)
 *.lnk
+
+# Pendientes de cada equipo (problemas por reintentar)
+PENDIENTES.md
