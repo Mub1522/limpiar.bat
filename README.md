@@ -30,6 +30,58 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 - Windows PowerShell 5.1 (viene con Windows) y permisos de administrador (se piden con la ventana de UAC).
 - Lo demas es opcional: si un programa no esta (Chrome, Brave, Firefox, Teams, Discord, Slack, Docker, WSL, pip, npm, Yarn, pnpm, Go, NuGet, PM2, drivers NVIDIA/AMD), su parte simplemente no encuentra nada y se sigue. Si `winget` no esta instalado, el paso 16 lo avisa en rojo.
 - Pensado para Windows en espanol o ingles. En otros idiomas funciona igual, pero el estado de WinRE puede aparecer como "N/D".
+- Para crear puntos de restauracion (paso 10), la Proteccion del sistema tiene que estar activada en C: (`sysdm.cpl` > Proteccion del sistema). Si no lo esta, el resto funciona igual.
+
+## Instalacion en otro equipo
+
+No se instala nada: es una carpeta que se copia y se ejecuta. No crea servicios ni tareas programadas, ni cambia la configuracion de Windows.
+
+### Que ocupa en el equipo
+
+| Que | Donde | Tamano |
+|---|---|---|
+| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~220 KB (~280 KB con `tests\` y las herramientas de desarrollo) |
+| `limpieza.log` | En la carpeta, se reemplaza en cada ejecucion | 30-300 KB |
+| `historial.csv` | En la carpeta, guarda las ultimas 200 ejecuciones | 10 KB como maximo |
+| Acceso directo `Limpieza Windows` (opcional) | Escritorio | 2 KB |
+| Puntos de restauracion | Los de Windows (Proteccion del sistema) | Se conservan solo los 2 mas recientes (paso 15) |
+
+Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Windows (`StateFlags0042` en el registro), y lo quita al terminar. Si la ejecucion se corta, la siguiente lo quita al empezar.
+
+### Pasos
+
+1. **Descarga la carpeta** en una ubicacion fija (el acceso directo guarda la ruta completa: si despues la mueves, vuelve a crearlo):
+   - con git: `git clone https://github.com/Mub1522/limpiar.bat.git`
+   - o desde GitHub: *Code* > *Download ZIP* y descomprime.
+2. **Si la descargaste como ZIP, desbloquea los archivos.** Windows marca lo que viene de internet y puede mostrar el aviso de SmartScreen al abrir `limpiar.bat`. En PowerShell, dentro de la carpeta:
+   ```powershell
+   Get-ChildItem -Recurse | Unblock-File
+   ```
+3. **Correo (opcional)**: crea `correo.json` a partir de la plantilla y llena tus datos (ver "Correo con el resumen"):
+   ```powershell
+   Copy-Item correo.ejemplo.json correo.json
+   notepad correo.json
+   ```
+   | Campo | Que poner |
+   |---|---|
+   | `activo` | `true` para enviar y `false` para no enviar (la configuracion se guarda) |
+   | `apiKey` | Tu API key de Resend: en [resend.com](https://resend.com), *API Keys* > *Create API Key*, con permiso *Sending access*. Empieza con `re_` |
+   | `de` | Deja `Limpieza Windows <onboarding@resend.dev>` si no tienes un dominio verificado en Resend |
+   | `para` | Con el remitente `onboarding@resend.dev`, solo el correo con el que creaste la cuenta de Resend |
+
+   Puedes usar el mismo `correo.json` en varios equipos: el asunto lleva el nombre de cada equipo.
+4. **Acceso directo (opcional)**: clic derecho en `crear-acceso-directo.ps1` > *Ejecutar con PowerShell*.
+5. **Primera ejecucion**: doble clic en `limpiar.bat` (o en el acceso directo). Para la primera, conviene responder N a la reparacion (tarda) y revisar el resumen y `limpieza.log` al terminar.
+
+### Que se copia de un equipo a otro
+
+| Archivo | Se copia? | Por que |
+|---|---|---|
+| Los archivos del repositorio | Si | Son el script |
+| `correo.json` | Si, si quieres el correo | Sirve igual en cualquier equipo. **Tiene la API key**: copialo solo a tus equipos y nunca lo subas a ningun sitio |
+| `historial.csv` | No | Es el historial de **ese** equipo: copiado, la tendencia del espacio y la "limpieza anterior" del resumen serian de otro disco |
+| `limpieza.log` | No | Es la ultima ejecucion de ese equipo |
+| `Limpieza Windows.lnk` | No | Guarda la ruta de la carpeta en el otro equipo: vuelve a crearlo con el paso 4 |
 
 ## Como usarlo
 
@@ -168,7 +220,6 @@ Y el correo, en `correo.json` (ver arriba).
 - **Compactar Docker/WSL** (S): cuando no tengas contenedores haciendo algo importante; tiene sentido despues de borrar imagenes o archivos grandes dentro de Linux.
 - **Paquetes de WSL** (S): cada 2-4 semanas, junto con la limpieza normal; mejor sin nada importante corriendo dentro de Linux (un servicio que se actualiza puede reiniciarse). Conviene responder S tambien a compactar, para que vuelva a Windows lo que libera `apt-get clean`.
 - El paso 15 cuenta **todos** los puntos de restauracion, incluidos los creados a mano o por Windows Update.
-- Para que se puedan crear puntos de restauracion, la Proteccion del sistema debe estar activada en C: (`sysdm.cpl` > Proteccion del sistema).
 
 ## Lo que no hace, a proposito
 
@@ -181,11 +232,23 @@ Y el correo, en `correo.json` (ver arriba).
 
 ## Si modificas el script
 
-Antes de guardar un cambio, ejecuta (no limpia nada, tarda unos segundos):
+Para usar el script no hace falta nada de esta seccion. Para modificarlo, en un equipo nuevo:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File verificar.ps1
+git clone https://github.com/Mub1522/limpiar.bat.git
+cd limpiar.bat
+git config core.hooksPath .githooks                        # una vez: verificar.ps1 corre antes de cada commit
+Install-Module PSScriptAnalyzer -Scope CurrentUser         # opcional
 ```
+
+| Para | Comando (en la carpeta del script; ninguno limpia nada) |
+|---|---|
+| Revisarlo todo (unos segundos) | `powershell -NoProfile -ExecutionPolicy Bypass -File verificar.ps1` |
+| Correr solo las pruebas | `Invoke-Pester -Script tests` |
+| Correr un archivo de pruebas | `Invoke-Pester -Script tests\lectura.Tests.ps1` |
+| Solo las pruebas de un grupo | `Invoke-Pester -Script tests -TestName 'ConvertFrom-TablaWinget*'` |
+
+Pester 3.4 viene con Windows. Si instalaste Pester 5, antes de `Invoke-Pester` carga la version vieja con `Import-Module Pester -MaximumVersion 4.99` (las pruebas usan la sintaxis de Pester 3; `verificar.ps1` ya lo hace solo).
 
 | Revision | Que comprueba |
 |---|---|
@@ -198,6 +261,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-26** - README: nueva seccion "Instalacion en otro equipo" (que ocupa, pasos para descargarlo y desbloquearlo, como llenar `correo.json` con la API key de Resend y que archivos se copian o no entre equipos) y comandos para correr las pruebas en "Si modificas el script". El script no cambia
 - **2026-11-26** - Pruebas automaticas: nuevo `verificar.ps1`, que revisa la sintaxis, que los `.ps1` sean solo ASCII y corre las pruebas de `tests\` (Pester), mas un hook de git que lo ejecuta antes de cada commit. La lectura de la tabla de winget (paso 16) y de la simulacion de apt (paso 12) quedo en funciones aparte (`ConvertFrom-TablaWinget` y `ConvertFrom-SimulacionApt`) para poder probarla con salidas de ejemplo. El script hace exactamente lo mismo que antes
 
 - **2026-11-26** - Tras la primera ejecucion del paso 12: al medir la cache de apt, el script cortaba `wsl.exe` antes de que terminara, y desde ahi el texto de la consola salia en escalera (cada linea empezaba donde acababa la anterior). El log no se afectaba. Ahora se lee la salida completa antes de usarla
