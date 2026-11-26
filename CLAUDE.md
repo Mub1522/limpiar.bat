@@ -95,6 +95,11 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `crear-acceso-directo.ps1` | Crea el acceso directo del Escritorio con `limpiar.ico`. |
 | `limpiar.ico` | Icono (negro con rojo neón; PNG de 16 a 256 px dentro del `.ico`). |
 | `correo.ejemplo.json` | Plantilla pública de `correo.json`. |
+| `verificar.ps1` | Revisión sin ejecutar la limpieza: sintaxis, solo ASCII, pruebas y PSScriptAnalyzer (si está instalado). Sale con 1 si algo falla. |
+| `tests\cargar.ps1` | Carga las funciones de `limpiar.ps1` desde el AST (sin ejecutar el script) y los módulos de `lib\`; `Log` no escribe nada. |
+| `tests\*.Tests.ps1` | Pruebas de Pester (ver 8.4). |
+| `tests\muestras\` | Salidas de ejemplo de winget y apt (UTF-8, sin datos de ningún equipo). |
+| `.githooks\pre-commit` | Corre `verificar.ps1` antes de cada commit. Se activa por equipo con `git config core.hooksPath .githooks`; va en LF (`.gitattributes`) porque lo ejecuta `sh`. |
 
 ### 4.2 Flujo de `limpiar.ps1`
 
@@ -145,8 +150,10 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `Test-InicioHabilitado` | Lee `Explorer\StartupApproved` (primer byte impar = deshabilitado en el Administrador de tareas). |
 | `Get-DiscosVirtuales` | Los `.vhdx` de WSL (`HKCU\...\Lxss`) y `docker_data.vhdx`. |
 | `Test-DockerActivo`, `Get-ImagenesDockerSinUso`, `ConvertFrom-TamanoDocker` | Paso 11. |
-| `Invoke-Wsl`, `Get-DistrosApt`, `Get-CacheApt`, `Update-PaquetesWsl`, `Update-PaquetesAptInstalados` | Paso 12. `Invoke-Wsl` ejecuta como root con `LC_ALL=C`, `DEBIAN_FRONTEND=noninteractive` y `NEEDRESTART_MODE=l`, y captura la salida en UTF-8. |
-| `Get-AppsDesactualizadas` | Lee la tabla de `winget upgrade` por la posición de los títulos (funciona en cualquier idioma). |
+| `Invoke-Wsl`, `Get-DistrosApt`, `Get-CacheApt`, `Update-PaquetesWsl`, `Update-PaquetesAptInstalados`, `ConvertFrom-SimulacionApt` | Paso 12. `Invoke-Wsl` ejecuta como root con `LC_ALL=C`, `DEBIAN_FRONTEND=noninteractive` y `NEEDRESTART_MODE=l`, y captura la salida en UTF-8. |
+| `Get-AppsDesactualizadas`, `ConvertFrom-TablaWinget` | Llama a `winget upgrade`; la segunda lee la tabla por la posición de los títulos (funciona en cualquier idioma). |
+
+Regla: la lectura de la salida de un programa externo va en una función `ConvertFrom-*` aparte, que recibe las líneas (y el código de salida) y no llama a nada. Así se prueba con muestras (8.4) sin ejecutar el programa.
 
 ### 4.5 Configuración (al inicio de `limpiar.ps1`)
 
@@ -253,23 +260,18 @@ Una variable al inicio de `limpiar.ps1`, con un comentario en la misma línea, m
 ## 8. Mantenimiento y verificación
 
 ### 8.1 Antes de dar un cambio por terminado
-1. Revisión de sintaxis de `limpiar.ps1` y de cada `lib\*.ps1` (8.2).
-2. Revisión de solo ASCII (debe dar 0).
-3. Probar las funciones nuevas en solo lectura (8.2), sin ejecutar el script.
+1. `verificar.ps1` sin fallos: sintaxis, solo ASCII y pruebas (8.2). El hook de pre-commit lo corre solo; no saltarlo con `--no-verify`.
+2. Si el cambio agrega o modifica lógica que se puede probar sin efectos (lectura de una salida, cálculo, borrado dentro de una carpeta), agregar o ajustar su prueba (8.4).
+3. Probar en solo lectura (8.2), sin ejecutar el script, las funciones nuevas que no tienen prueba.
 4. Si cambió el resumen o el correo: vista previa en el navegador, también en tamaño celular.
 5. README actualizado (sección 3) y este archivo (sección 9).
 6. Contarle al usuario qué no se pudo probar sin una ejecución real (normalmente, lo que necesita permisos de administrador).
 
 ### 8.2 Comandos
 
-Sintaxis, sin ejecutar nada (en `limpiar.ps1` y en cada `lib\*.ps1`):
+Sintaxis, solo ASCII y pruebas, sin ejecutar la limpieza (tarda unos segundos):
 ```powershell
-$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("$PWD\limpiar.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e } else { "Sintaxis OK" }
-```
-
-Solo ASCII (debe imprimir 0):
-```powershell
-@(Select-String -Path limpiar.ps1, lib\*.ps1 -Pattern '[^\x00-\x7F]').Count
+powershell -NoProfile -ExecutionPolicy Bypass -File verificar.ps1
 ```
 
 Probar una función de `limpiar.ps1` por separado (extraerla del AST y cargarla):
@@ -296,6 +298,15 @@ Get-Content limpieza.log | Where-Object { $_ -notmatch '^\[\d\d:\d\d:\d\d\]   (b
 - Comparar lo liberado con el delta de espacio libre del resumen.
 - Ver si algún aviso del resumen es un falso positivo; si lo es, ajustar el umbral y registrar el caso real en 6.4.
 - Lo que se aprenda de una ejecución real (números, errores nuevos) va a la sección 6 con la fecha.
+
+### 8.4 Pruebas (`tests\`)
+- **Pester 3.4**, el que viene con Windows: sintaxis `Should Be`, no `Should -Be` (esa es de Pester 4+). `verificar.ps1` usa la versión 3 o 4 más nueva que haya, así que instalar Pester 5 no las rompe.
+- Cada `*.Tests.ps1` empieza con `. (Join-Path $PSScriptRoot 'cargar.ps1')`. Las pruebas también son `.ps1`: **solo ASCII**.
+- **Nunca tocar carpetas reales:** lo que borra trabaja en `$TestDrive` (carpeta temporal de Pester). Para .NET (`[IO.File]`) usar `"$TestDrive\..."`, no `TestDrive:\`, que .NET no entiende.
+- No probar lo que necesita administrador, red o programas externos (winget, wsl, docker, el registro): se prueba su función `ConvertFrom-*` con una muestra (4.4).
+- Muestras en `tests\muestras`, en UTF-8 y con apps o paquetes genéricos: **nunca** copiar una salida de este PC con nombres de proyectos, rutas o el nombre del equipo (repo público).
+- `reglas.Tests.ps1` revisa el código **sin comentarios** contra la lista de 2.2 y las trampas de 6.1/6.2 (`volume prune`, `full-upgrade`, `-NoNewline`...). Si el usuario autoriza algo de 2.2, se quita su patrón ahí en el mismo cambio. Si se agrega algo a 2.2, se agrega su patrón.
+- Una prueba que se escribe y pasa a la primera no prueba nada hasta que se la ve fallar: romper la función a propósito, ver que la prueba falla y deshacer el cambio. Así se hizo el 2026-11-26 con `Clear-Folder` y la regla de `volume prune`.
 
 ---
 

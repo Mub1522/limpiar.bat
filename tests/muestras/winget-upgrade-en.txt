@@ -1,0 +1,9 @@
+Name                           Id                           Version       Available     Source
+----------------------------------------------------------------------------------------------
+Git                            Git.Git                      2.45.1        2.47.0        winget
+7-Zip 23.01 (x64)              7zip.7zip                    23.01         24.08         winget
+2 Factor Authenticator         Ejemplo.TwoFactor            1.0.0         1.1.0         winget
+MySQL Workbench                Oracle.MySQLWorkbench        < 8.0.40      8.0.41        winget
+4 upgrades available.
+
+1 package(s) have version numbers that cannot be determined. Use --include-unknown to see all results.

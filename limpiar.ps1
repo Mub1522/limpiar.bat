@@ -311,19 +311,28 @@ function Update-PaquetesWsl($distro) {
     return $r
 }
 
-# Parte de Update-PaquetesWsl que corre solo si apt-get update funciono: lista lo que hay para
-# actualizar, lo actualiza y anota el resultado en $r
-function Update-PaquetesAptInstalados($distro, $r, $esperarBloqueo) {
-    # Simulacion (no cambia nada) para saber que se va a actualizar:
-    # lineas "Inst paquete [version actual] (version nueva ...)" y el total "... and N not upgraded."
-    $simulacion = Invoke-Wsl $distro @('apt-get', '-s', 'upgrade')
-    $paquetes = @(foreach ($l in $simulacion) {
+# Lee la salida de "apt-get -s upgrade" (simulacion): lineas "Inst paquete [version actual] (version nueva ...)"
+# y el total "... and N not upgraded.". Devuelve Paquetes (Nombre, Instalada, Disponible) y Retenidos.
+# Separada de la llamada a WSL para poder probarla con salidas reales guardadas (tests\).
+function ConvertFrom-SimulacionApt($lineas) {
+    $paquetes = @(foreach ($l in $lineas) {
         if ($l -match '^Inst (\S+) \[([^\]]+)\] \((\S+)') {
             [pscustomobject]@{ Nombre = $Matches[1]; Instalada = $Matches[2]; Disponible = $Matches[3] }
         }
     })
-    $lineaTotal = $simulacion | Where-Object { $_ -match 'and (\d+) not upgraded' } | Select-Object -Last 1
-    if ($lineaTotal -match 'and (\d+) not upgraded') { $r.Retenidos = [int]$Matches[1] }
+    $retenidos = 0
+    $lineaTotal = $lineas | Where-Object { $_ -match 'and (\d+) not upgraded' } | Select-Object -Last 1
+    if ($lineaTotal -match 'and (\d+) not upgraded') { $retenidos = [int]$Matches[1] }
+    return [pscustomobject]@{ Paquetes = $paquetes; Retenidos = $retenidos }
+}
+
+# Parte de Update-PaquetesWsl que corre solo si apt-get update funciono: lista lo que hay para
+# actualizar, lo actualiza y anota el resultado en $r
+function Update-PaquetesAptInstalados($distro, $r, $esperarBloqueo) {
+    # Simulacion (no cambia nada) para saber que se va a actualizar
+    $simulacion = ConvertFrom-SimulacionApt (Invoke-Wsl $distro @('apt-get', '-s', 'upgrade'))
+    $paquetes = $simulacion.Paquetes
+    $r.Retenidos = $simulacion.Retenidos
 
     if (-not $paquetes) {
         Log "    todo al dia" Green
@@ -371,7 +380,15 @@ function Get-AppsDesactualizadas {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     try { $salida = winget upgrade --accept-source-agreements --disable-interactivity 2>$null }
     finally { [Console]::OutputEncoding = $encAnterior }
-    $codigo = $LASTEXITCODE
+    $tabla = ConvertFrom-TablaWinget $salida $LASTEXITCODE
+    $script:estadoWinget = $tabla.Estado
+    $tabla.Apps
+}
+
+# Lee la salida de "winget upgrade" (lineas de texto) y su codigo de salida. Devuelve Estado
+# ('ok', 'al dia' o 'error (codigo N)') y Apps (Nombre, Id, Instalada, Disponible).
+# Separada de la llamada a winget para poder probarla con salidas reales guardadas (tests\).
+function ConvertFrom-TablaWinget($salida, $codigo) {
     # Quitar la animacion de carga que winget escribe con `r antes de la tabla
     $lineas = @($salida | ForEach-Object { ("$_" -split "`r")[-1] })
     $iSep = 0..($lineas.Count - 1) | Where-Object { $lineas[$_] -match '^-{10,}$' } | Select-Object -First 1
@@ -380,11 +397,10 @@ function Get-AppsDesactualizadas {
     }
     if (-not $col -or $col.Count -lt 5) {
         # Sin tabla: 0 o "No installed package found" (-1978335212) = no hay actualizaciones; otro codigo = fallo
-        $script:estadoWinget = if ($codigo -eq 0 -or $codigo -eq -1978335212) { 'al dia' } else { "error (codigo $codigo)" }
-        return
+        $estado = if ($codigo -eq 0 -or $codigo -eq -1978335212) { 'al dia' } else { "error (codigo $codigo)" }
+        return [pscustomobject]@{ Estado = $estado; Apps = @() }
     }
-    $script:estadoWinget = 'ok'
-    foreach ($l in $lineas[($iSep + 1)..($lineas.Count - 1)]) {
+    $apps = @(foreach ($l in $lineas[($iSep + 1)..($lineas.Count - 1)]) {
         # La tabla termina en la primera linea vacia o en el total ("17 upgrades available.",
         # 3 palabras; una fila de app tiene al menos 5 columnas aunque el nombre empiece con numero)
         if (-not $l.Trim() -or ($l -match '^\d+ ' -and @($l.Trim() -split '\s+').Count -le 4)) { break }
@@ -395,7 +411,8 @@ function Get-AppsDesactualizadas {
             Disponible = Get-Columna $l $col[3] $col[4]
         }
         if ($app.Id) { $app }
-    }
+    })
+    return [pscustomobject]@{ Estado = 'ok'; Apps = $apps }
 }
 
 $esAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(

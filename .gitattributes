@@ -2,3 +2,5 @@
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.ico binary
+# Los hooks de git los ejecuta sh: con CRLF fallan
+.githooks/* text eol=lf

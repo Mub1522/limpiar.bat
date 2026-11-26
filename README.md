@@ -18,6 +18,9 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 | `correo.json` | Configuracion del correo, **incluida la API key de Resend**. No lo compartas. Es opcional: se crea copiando `correo.ejemplo.json`. |
 | `correo.ejemplo.json` | Plantilla de `correo.json` sin datos reales. |
 | `limpieza.log` | Log de la **ultima** ejecucion. Se reemplaza cada vez. Guarda todo lo util: tus respuestas, que hizo u omitio cada paso, errores y el resumen final. |
+| `verificar.ps1` | Solo para quien modifica el script: revisa la sintaxis, que los `.ps1` sean solo ASCII y corre las pruebas. No limpia nada (ver "Si modificas el script"). |
+| `tests\` | Pruebas automaticas (Pester) y, en `tests\muestras`, salidas de ejemplo de winget y apt sin datos de ningun equipo. |
+| `.githooks\pre-commit` | Ejecuta `verificar.ps1` antes de cada commit. |
 
 `correo.json`, `limpieza.log`, `historial.csv` y el acceso directo (`.lnk`) son de cada equipo y estan en `.gitignore`: nunca se suben al repositorio.
 
@@ -176,7 +179,26 @@ Y el correo, en `correo.json` (ver arriba).
 - **Borrar `C:\Windows\Installer`**, la cache de miniaturas o instantaneas que no son puntos de restauracion: o es peligroso o libera muy poco.
 - **Desactivar programas de inicio**: solo se informan en el resumen; tu decides cuales quitar.
 
+## Si modificas el script
+
+Antes de guardar un cambio, ejecuta (no limpia nada, tarda unos segundos):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File verificar.ps1
+```
+
+| Revision | Que comprueba |
+|---|---|
+| Sintaxis | Que `limpiar.ps1`, `lib\`, `tests\` y los demas `.ps1` se puedan leer (sin ejecutarlos). |
+| Solo ASCII | Que ningun `.ps1` tenga tildes ni simbolos: Windows PowerShell 5.1 los desfigura. |
+| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`; el borrado de carpetas (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); y que el codigo no use nada de "Lo que no hace, a proposito". |
+| PSScriptAnalyzer | Solo si esta instalado (`Install-Module PSScriptAnalyzer -Scope CurrentUser`). Es opcional. |
+
+Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commit, activa el hook una vez en cada equipo con `git config core.hooksPath .githooks`.
+
 ## Historial de cambios
+
+- **2026-11-26** - Pruebas automaticas: nuevo `verificar.ps1`, que revisa la sintaxis, que los `.ps1` sean solo ASCII y corre las pruebas de `tests\` (Pester), mas un hook de git que lo ejecuta antes de cada commit. La lectura de la tabla de winget (paso 16) y de la simulacion de apt (paso 12) quedo en funciones aparte (`ConvertFrom-TablaWinget` y `ConvertFrom-SimulacionApt`) para poder probarla con salidas de ejemplo. El script hace exactamente lo mismo que antes
 
 - **2026-11-26** - Tras la primera ejecucion del paso 12: al medir la cache de apt, el script cortaba `wsl.exe` antes de que terminara, y desde ahi el texto de la consola salia en escalera (cada linea empezaba donde acababa la anterior). El log no se afectaba. Ahora se lee la salida completa antes de usarla
 - **2026-11-26** - Nuevo paso 12 (opcional, con pregunta): actualiza los paquetes de Linux de las distribuciones WSL con `apt` (`apt-get update` + `upgrade`, sin instalar ni quitar paquetes y conservando la configuracion) y borra los paquetes descargados (`apt-get clean`, aunque el update falle). Antes nada dentro de WSL se actualizaba: winget actualiza WSL, pero no lo que esta instalado dentro de Ubuntu. Los cambios de etiqueta de un repositorio se aceptan solos (en la primera prueba, el PPA de PHP paso a "deprecated" y `apt-get update` fallaba por eso). Nueva seccion "Paquetes de Linux (WSL)" en el resumen. Los pasos siguientes pasan a ser 13 (compactar), 14 (TRIM), 15 (puntos de restauracion), 16 (winget) y 17 (revision de salud).
