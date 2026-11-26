@@ -281,6 +281,13 @@ function Show-Resumen($d) {
     }
     elseif ($salud.SistemaArchivos -match 'Fixed') { Write-Estado 'OK' 'Sistema de archivos' 'errores menores, ya corregidos en linea' }
     else { Write-Estado 'AVISO' 'Sistema de archivos' "errores ($($salud.SistemaArchivos)): como admin, 'chkdsk C: /f' (S) y reiniciar" }
+    # Solo si fallo: sin TRIM el SSD se va volviendo mas lento al escribir (ver log, paso 13)
+    if ($d.TrimError) {
+        $textoTrim = "no se pudo hacer: $($d.TrimError)"
+        # 0x89000015: C: esta marcado para revisar y Windows no optimiza hasta que se repare
+        if ($d.TrimError -match '0x89000015') { $textoTrim = 'no se pudo hacer porque C: tiene una reparacion pendiente (linea anterior)' }
+        Write-Estado 'AVISO' 'TRIM del SSD' $textoTrim
+    }
 
     # Poco espacio: con menos del 15 % libre Windows y las actualizaciones empiezan a tener problemas
     if ($d.TamanoC -gt 0) {

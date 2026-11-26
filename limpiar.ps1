@@ -293,6 +293,7 @@ $esAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 $total = 0
 $compactados = @()
+$trimError = $null   # motivo si el TRIM del paso 13 falla (va al resumen)
 $dockerLiberado = 0          # bytes liberados dentro del disco virtual de Docker (paso 11)
 $imagenesDockerBorradas = @()
 $libreInicio = (Get-PSDrive C).Free
@@ -371,8 +372,8 @@ if ($bytesLogsPm2 -gt 50MB) {
 }
 if ($esAdmin) {
     [void]$preguntas.Add(@{ Clave = 'dism'; Titulo = 'Limpieza profunda de Windows (DISM)'
-        Detalle = @('Borra versiones viejas de actualizaciones y de drivers ya reemplazados. Tarda 5-15 minutos.',
-            'Despues no se podra desinstalar esas actualizaciones ni volver a la version anterior de un driver.') })
+        Detalle = @('Borra versiones viejas de componentes de Windows Update. Tarda 5-15 minutos.',
+            'Despues no se podra desinstalar las actualizaciones ya instaladas.') })
     # Restos de una actualizacion grande: solo si ninguno es reciente (actualizacion en curso o que aun se puede deshacer)
     $bytesRestos = ($restosActualizacion | Measure-Object Bytes -Sum).Sum
     if ($bytesRestos -gt 100MB -and -not ($restosActualizacion | Where-Object Reciente)) {
@@ -667,7 +668,8 @@ if ($esAdmin) {
     # de la actualizacion aunque en disco ocupen mucho menos
     $libreAntes = (Get-PSDrive C).Free
     try {
-        Delete-DeliveryOptimizationCache -Force -ErrorAction Stop
+        # 6>$null: la funcion escribe "Deleting..." con Write-Host, que quedaba en el log sin hora
+        Delete-DeliveryOptimizationCache -Force -ErrorAction Stop 6>$null
         $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
         Log "  $liberado MB liberados (medido por el espacio libre del disco)" Green
         $total += $liberado
@@ -677,17 +679,14 @@ if ($esAdmin) {
 
     # --- Paso 9 (opcional): limpieza de componentes de Windows con DISM ---
     Log "Paso 9 (opcional): limpieza profunda de Windows (restos de actualizaciones grandes y DISM)" Yellow
-    # Liberador de espacio de Windows: restos de la actualizacion grande (si se autorizo) y, con la
-    # limpieza profunda, los paquetes de drivers que ya tienen una version mas nueva instalada
+    # Liberador de espacio de Windows: restos de la actualizacion grande, si se autorizo.
+    # Sin "Device Driver Packages": en tres ejecuciones (24 y 25/11/2026) libero 0 MB y tardo mas de
+    # 1 hora (trabado), 9 minutos y 20 (cortado por el tiempo maximo)
     $categoriasLiberador = @()
     $queLiberador = @()
     if ($borrarRestos) {
         $categoriasLiberador += 'Previous Installations', 'Temporary Setup Files', 'Windows Upgrade Log Files', 'Setup Log Files'
         $queLiberador += 'restos de la actualizacion grande'
-    }
-    if ($hacerDism) {
-        $categoriasLiberador += 'Device Driver Packages'
-        $queLiberador += 'drivers ya reemplazados'
     }
     if ($categoriasLiberador) {
         Log "  Liberador de espacio de Windows ($($queLiberador -join ' y ')), puede tardar unos minutos..."
@@ -900,12 +899,22 @@ if ($esAdmin) {
     if ($discoC.MediaType -eq 'SSD') {
         # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
         # solo mensaje con saltos de linea y tabuladores: se parte para que cada linea lleve su hora.
-        Optimize-Volume -DriveLetter C -ReTrim -Verbose 4>&1 |
+        $inicioTrim = Get-Date
+        Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue -ErrorVariable errTrim 4>&1 |
             ForEach-Object { "$_" -split "`r?`n" } |
             ForEach-Object { ($_ -replace "`t", '  ').TrimEnd() } |
             Where-Object { $_.Trim() -and $_ -notmatch '\d+% completado' } |
             ForEach-Object { Log "  $_" DarkGray }
-        Log "  TRIM terminado" Green
+        if ($errTrim) {
+            # El error solo dice "Failed"; el motivo esta en el evento 264 del optimizador (Application).
+            # Caso real del 25/11/2026: "El bit de integridad esta establecido en este volumen" (0x89000015),
+            # porque C: tenia una reparacion pendiente que chkdsk no podia hacer
+            $evTrim = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Microsoft-Windows-Defrag'; Id = 264; StartTime = $inicioTrim.AddSeconds(-5) } -MaxEvents 1 -ErrorAction SilentlyContinue
+            $trimError = if ($evTrim) { ($evTrim.Message -split ' debido a: ', 2)[-1].Trim() } else { "$($errTrim[0].Exception.Message)".Trim() }
+            Log "  el TRIM no se pudo hacer: $trimError" DarkYellow
+        } else {
+            Log "  TRIM terminado" Green
+        }
     } else {
         Log "  C: no es SSD, se omite" DarkYellow
     }
@@ -1040,6 +1049,7 @@ Show-Resumen @{
     Anterior         = Get-UltimaEjecucion $archivoHistorial
     Tendencia        = Get-TendenciaEspacio $archivoHistorial $unidadC.Free ($unidadC.Used + $unidadC.Free)
     Compactados      = $compactados
+    TrimError        = $trimError
     DockerInstalado  = $dockerInstalado
     DockerActivo     = $dockerActivo
     DockerLiberado   = $dockerLiberado
