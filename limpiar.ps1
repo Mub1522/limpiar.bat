@@ -535,16 +535,19 @@ if ($esAdmin) {
         Detalle = @('Algunas apps pueden cerrarse mientras se actualizan.') })
 }
 
-# Interpreta una respuesta: 'S', 'N' (Enter = N), 'T' (si a esta y a todas las que faltan) o $null (no valida).
+# Interpreta una respuesta: 'S', 'N', 'T' (si a esta y a todas las que faltan) o $null (no valida).
+# Enter sin escribir nada no es valido: hay que elegir (lo pidio el usuario el 2026-11-26).
+# $null (Read-Host sin entrada, por ejemplo con la entrada cerrada) = N, para no preguntar para siempre.
 function ConvertFrom-RespuestaSiNo($texto) {
+    if ($null -eq $texto) { return 'N' }
     $resp = "$texto".Trim()
     if ($resp -match '^(s|si)$') { return 'S' }
-    if ($resp -match '^(n|no)?$') { return 'N' }
+    if ($resp -match '^(n|no)$') { return 'N' }
     if ($resp -match '^(t|todas?|todo)$') { return 'T' }
     return $null
 }
 
-# Tarjeta de una pregunta S/N/T. Enter sin escribir nada = No; otra respuesta se vuelve a preguntar.
+# Tarjeta de una pregunta S/N/T. Otra respuesta (o Enter sin nada) se vuelve a preguntar.
 # Con -SiATodas la tarjeta se muestra igual (para que quede a la vista y en el log), pero sin preguntar.
 # La respuesta se repite en su propia linea porque lo que se escribe en Read-Host no queda en el log.
 function Read-SiNo($pregunta, $numero, $cantidad, [switch]$SiATodas) {
@@ -552,10 +555,9 @@ function Read-SiNo($pregunta, $numero, $cantidad, [switch]$SiATodas) {
     Write-Host ('  [{0}/{1}] {2}' -f $numero, $cantidad, $pregunta.Titulo) -ForegroundColor White
     foreach ($linea in $pregunta.Detalle) { Write-Host "        $linea" -ForegroundColor DarkGray }
     if ($SiATodas) { Write-Host '        -> SI (todas)' -ForegroundColor Green; return 'S' }
-    $opciones = if ($cantidad -gt 1) { '        S/N, T = si a todas (Enter = N)' } else { '        S/N (Enter = N)' }
+    $opciones = if ($cantidad -gt 1) { '        S/N, T = si a todas' } else { '        S/N' }
     while ($true) {
-        # "$(...)": si Read-Host no devuelve nada (entrada cerrada) se toma como vacio = No, sin error
-        $resp = ConvertFrom-RespuestaSiNo "$(Read-Host $opciones)"
+        $resp = ConvertFrom-RespuestaSiNo (Read-Host $opciones)
         if ($resp -eq 'S') { Write-Host '        -> SI' -ForegroundColor Green; return 'S' }
         if ($resp -eq 'T') { Write-Host '        -> SI (y a todas las que faltan)' -ForegroundColor Green; return 'T' }
         if ($resp -eq 'N') { Write-Host '        -> NO' -ForegroundColor DarkGray; return 'N' }

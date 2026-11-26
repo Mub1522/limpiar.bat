@@ -97,7 +97,7 @@ Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Win
 
 Al abrirse, el script muestra un encabezado (equipo, fecha y si corre como administrador) y luego las preguntas, cada una en su tarjeta numerada (`[1/6]`, `[2/6]`...) con una explicacion corta debajo. Solo aparecen las que aplican en ese momento. Despues de responderlas el script corre solo, sin pedir nada mas.
 
-Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escribir nada = No.** Con `T` (o `todas`) se responde **si a esa y a todas las que faltan**: las tarjetas siguientes se muestran igual, ya marcadas con `-> SI (todas)`, sin preguntar. Escribirla en la primera marca todo con S. Cualquier otra respuesta se vuelve a preguntar. Debajo de cada pregunta queda la respuesta (`-> SI` / `-> NO`), tambien en el log.
+Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escribir nada no vale**: hay que elegir. Con `T` (o `todas`) se responde **si a esa y a todas las que faltan**: las tarjetas siguientes se muestran igual, ya marcadas con `-> SI (todas)`, sin preguntar. Escribirla en la primera marca todo con S. Cualquier otra respuesta se vuelve a preguntar. Debajo de cada pregunta queda la respuesta (`-> SI` / `-> NO`), tambien en el log.
 
 - **Cerrar el navegador** (solo si hay uno abierto) para limpiar su cache. Se cierra recien al llegar al paso 4.
 - **Cerrar Teams, Discord o Slack** (solo si esta abierto y su cache pasa de 50 MB) para limpiar su cache. Se cierra al llegar al paso 4 y no se vuelve a abrir solo; si estas en una llamada, responde N.
@@ -264,7 +264,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
-- **2026-11-26** - Las preguntas del inicio aceptan `T` (o `todas`): si a esa pregunta y a todas las que faltan. Las demas tarjetas se siguen mostrando (y quedan en el log) con `-> SI (todas)`.
+- **2026-11-26** - Las preguntas del inicio aceptan `T` (o `todas`): si a esa pregunta y a todas las que faltan. Las demas tarjetas se siguen mostrando (y quedan en el log) con `-> SI (todas)`. Enter sin escribir nada ya no cuenta como No: se vuelve a preguntar.
 - **2026-11-26** - `.vscode\settings.json` pasa a subirse al repositorio: VS Code se ve en negro con rojo neon (los colores del correo) en cualquier equipo. El script no cambia
 - **2026-11-26** - Nuevo `crear-acceso-directo.bat`: el acceso directo ahora se crea con doble clic (antes, `crear-acceso-directo.ps1` con *Ejecutar con PowerShell* a veces fallaba por la politica de ejecucion de scripts). `limpiar.bat` sigue sin icono propio en el Explorador: Windows no lo permite en un `.bat`, por eso el icono va en el acceso directo
 - **2026-11-26** - Nueva carpeta `memory-global\` con las notas y reglas de Claude Code que valen en cualquier equipo, para que esten iguales en todos. Lo de cada equipo queda fuera del repositorio. El script no cambia
