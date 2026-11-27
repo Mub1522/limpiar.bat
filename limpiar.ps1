@@ -238,15 +238,19 @@ function Get-CarpetasCache($raiz) {
     $encontradas
 }
 
-# Limpia una cache con el comando oficial de su herramienta (pnpm, go) y devuelve los MB liberados,
-# medidos por lo que achico su carpeta
-function Invoke-LimpiezaComando($texto, $carpeta, $exe, $argumentos) {
+# Limpia una cache con el comando oficial de su herramienta (pnpm, go, composer...) y devuelve los MB
+# liberados, medidos por lo que achico su carpeta. Con -PorEspacioLibre se miden por el espacio libre de la
+# unidad: uv, conda y Bun enlazan (hardlink) sus archivos en los proyectos, y un archivo que sale de la
+# cache pero sigue enlazado en un proyecto no libera nada (por la carpeta se contaria de mas).
+function Invoke-LimpiezaComando($texto, $carpeta, $exe, $argumentos, [switch]$PorEspacioLibre) {
     Log "  ${texto}: $(Split-Path $exe -Leaf) $($argumentos -join ' ')"
-    $antes = Get-FolderSize $carpeta
+    $unidad = if ($carpeta) { (Split-Path $carpeta -Qualifier).TrimEnd(':') } else { 'C' }
+    $antes = if ($PorEspacioLibre) { (Get-PSDrive $unidad).Free } else { Get-FolderSize $carpeta }
     & $exe @argumentos 2>&1 | ForEach-Object { "$_" -replace '\x1b\[[0-9;]*m', '' } | Where-Object { $_.Trim() } |
         ForEach-Object { Log "  $($_.Trim())" DarkGray }
     if ($LASTEXITCODE -ne 0) { Log "  $exe termino con codigo $LASTEXITCODE" DarkYellow }
-    $liberado = [math]::Round([math]::Max([double]0, $antes - (Get-FolderSize $carpeta)) / 1MB, 2)
+    $diferencia = if ($PorEspacioLibre) { (Get-PSDrive $unidad).Free - $antes } else { $antes - (Get-FolderSize $carpeta) }
+    $liberado = [math]::Round([math]::Max([double]0, $diferencia) / 1MB, 2)
     Log "  $liberado MB liberados" Green
     return $liberado
 }
@@ -913,7 +917,7 @@ $total += Clear-Folders @(
 )
 
 # --- Paso 6: cache de paquetes de desarrollo (pip, npm y, si se autorizo, NuGet y logs de PM2) ---
-Log "Paso 6: cache de paquetes de desarrollo (pip, npm, Yarn, pnpm, Go, NuGet) y logs de PM2" Yellow
+Log "Paso 6: cache de paquetes de desarrollo (pip, npm, Yarn, pnpm, Go, Composer, uv, Bun, conda, NuGet) y logs de PM2" Yellow
 # Yarn 1: los proyectos tienen su propia copia en node_modules. La cache de Yarn 2+ (Berry) no se toca:
 # con Plug'n'Play los proyectos leen los paquetes directamente de ahi y dejarian de funcionar hasta reinstalar.
 $total += Clear-Folders @(
@@ -938,6 +942,33 @@ if (Get-Command go -ErrorAction SilentlyContinue) {
     if ($cacheGo -and (Test-Path $cacheGo)) {
         $total += Invoke-LimpiezaComando 'Go, cache de compilacion' $cacheGo 'go' @('clean', '-cache')
     }
+}
+# Mas caches de desarrollo, cada una con el comando oficial de su herramienta y solo si esta instalada en
+# Windows (lo de WSL no se toca aqui). Gradle y Cargo no estan a proposito: se limpian solos (Gradle borra lo
+# que no se uso en 30 dias; Cargo, desde la 1.88, lo de 3 meses) y no tienen un comando oficial para hacerlo.
+$cachesConComando = @(
+    # Composer: zips descargados; vendor\ de cada proyecto tiene su propia copia
+    @{ Texto = 'Composer (PHP), cache de descargas'; Exe = 'composer'; Carpeta = @('config', '--global', 'cache-dir')
+       Limpiar = @('clear-cache', '--no-interaction'); PorEspacioLibre = $false }
+    # uv: 'prune' solo quita lo que ya no se usa
+    @{ Texto = 'uv (Python), entradas sin usar'; Exe = 'uv'; Carpeta = @('cache', 'dir')
+       Limpiar = @('cache', 'prune'); PorEspacioLibre = $true }
+    @{ Texto = 'Bun, cache de paquetes'; Exe = 'bun'; Carpeta = @('pm', 'cache')
+       Limpiar = @('pm', 'cache', 'rm'); PorEspacioLibre = $true }
+    # conda: --all = indices, tarballs, paquetes que no usa ningun entorno y logs (no toca los entornos)
+    @{ Texto = 'conda, paquetes y descargas sin usar'; Exe = 'conda'; Carpeta = $null
+       Limpiar = @('clean', '--all', '--yes'); PorEspacioLibre = $true }
+)
+foreach ($h in $cachesConComando) {
+    $exe = Get-Command $h.Exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $exe) { continue }
+    $carpeta = $null
+    if ($h.Carpeta) {
+        # La ultima linea con texto: antes puede haber avisos de la herramienta
+        $carpeta = @(& $exe.Source @($h.Carpeta) 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ })[-1]
+        if (-not $carpeta -or -not (Test-Path -LiteralPath $carpeta)) { Log "  $($h.Texto): no hay cache" DarkGray; continue }
+    }
+    $total += Invoke-LimpiezaComando $h.Texto $carpeta $exe.Source $h.Limpiar -PorEspacioLibre:$h.PorEspacioLibre
 }
 if ($borrarNuget) {
     $total += Clear-Folders $carpetasNuget

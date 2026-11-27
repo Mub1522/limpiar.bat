@@ -20,7 +20,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 | `correo.ejemplo.json` | Plantilla de `correo.json` sin datos reales. |
 | `limpieza.log` | Log de la **ultima** ejecucion. Se reemplaza cada vez. Guarda todo lo util: tus respuestas, que hizo u omitio cada paso, errores y el resumen final. |
 | `verificar.ps1` | Solo para quien modifica el script: revisa la sintaxis, que los `.ps1` sean solo ASCII y corre las pruebas. No limpia nada (ver "Si modificas el script"). |
-| `tests\` | Pruebas automaticas (Pester) y, en `tests\muestras`, salidas de ejemplo de winget y apt sin datos de ningun equipo. |
+| `tests\` | Pruebas automaticas (Pester) y, en `tests\muestras`, salidas de ejemplo de winget y apt y un evento de arranque, sin datos de ningun equipo. |
 | `.githooks\pre-commit` | Ejecuta `verificar.ps1` antes de cada commit. |
 | `.vscode\settings.json` | Colores de VS Code para esta carpeta (negro con rojo neon, como el correo). Solo cambia como se ve el editor. |
 | `memory-global\` | Notas y reglas para Claude Code (el asistente con el que se mantiene el script). El script no las usa; puedes ignorar la carpeta. |
@@ -31,7 +31,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 
 - Windows 10 u 11, instalado en C:.
 - Windows PowerShell 5.1 (viene con Windows) y permisos de administrador (se piden con la ventana de UAC). Son obligatorios: sin ellos el script no hace nada.
-- Lo demas es opcional: si un programa no esta (Chrome, Brave, Firefox, Teams, Discord, Slack, Docker, WSL, pip, npm, Yarn, pnpm, Go, NuGet, PM2, drivers NVIDIA/AMD), su parte simplemente no encuentra nada y se sigue. Si `winget` no esta instalado, el paso 16 lo avisa en rojo.
+- Lo demas es opcional: si un programa no esta (Chrome, Brave, Firefox, Teams, Discord, Slack, Docker, WSL, pip, npm, Yarn, pnpm, Go, Composer, uv, Bun, conda, NuGet, PM2, drivers NVIDIA/AMD), su parte simplemente no encuentra nada y se sigue. Si `winget` no esta instalado, el paso 16 lo avisa en rojo.
 - Pensado para Windows en espanol o ingles. En otros idiomas funciona igual, pero el estado de WinRE puede aparecer como "N/D".
 - Para crear puntos de restauracion (paso 10), la Proteccion del sistema tiene que estar activada en C: (`sysdm.cpl` > Proteccion del sistema). Si no lo esta, el resto funciona igual.
 
@@ -43,7 +43,7 @@ No se instala nada: es una carpeta que se copia y se ejecuta. No crea servicios 
 
 | Que | Donde | Tamano |
 |---|---|---|
-| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~290 KB (~350 KB con `tests\` y las herramientas de desarrollo) |
+| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~310 KB (~370 KB con `tests\` y las herramientas de desarrollo) |
 | `limpieza.log` | En la carpeta, se reemplaza en cada ejecucion | 30-300 KB |
 | `historial.csv` | En la carpeta, guarda las ultimas 200 ejecuciones | 10 KB como maximo |
 | Acceso directo `Limpieza Windows` (opcional) | Escritorio | 2 KB |
@@ -125,7 +125,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 3. **Cache de Windows Update**: detiene sus servicios, borra y los vuelve a iniciar. El log dice si cada servicio quedo en marcha (si alguno no, Windows lo inicia solo cuando lo necesita)
 4. **Cache de navegadores** (Chrome, Edge, Brave, Firefox), **de VS Code y de apps de chat** (Teams, Teams clasico, Discord, Slack): solo cache (carpetas `Cache`, `Code Cache` y `GPUCache`). No toca historial, cookies, contrasenas, sesiones ni mensajes. VS Code no se cierra nunca (podria haber archivos sin guardar): si esta abierto, su cache se salta. Las apps de chat abiertas tambien se saltan, salvo que respondieras S a cerrarlas
 5. **Cache de shaders de la GPU** (NVIDIA, DirectX, AMD)
-6. **Cache de paquetes de desarrollo y logs de PM2**: siempre pip, npm, Yarn 1, pnpm (`pnpm store prune`: solo los paquetes que ya no usa ningun proyecto) y la cache de compilacion de Go (`go clean -cache`). La cache de Yarn 2+ no se toca (con Plug'n'Play los proyectos leen los paquetes de ahi), ni los modulos de Go. Ademas, NuGet (.NET) y los logs de PM2 (`%USERPROFILE%\.pm2\logs`, o `PM2_HOME` si esta definida) si respondiste S. Si PM2 esta en marcha sus logs se vacian con `pm2 flush` (borrarlos no liberaria nada mientras PM2 los tiene abiertos); si esta detenido se borran directamente
+6. **Cache de paquetes de desarrollo y logs de PM2**: siempre pip, npm, Yarn 1, pnpm (`pnpm store prune`: solo los paquetes que ya no usa ningun proyecto) y la cache de compilacion de Go (`go clean -cache`). Si estan instalados en Windows, tambien Composer (`composer clear-cache`), uv (`uv cache prune`: solo lo que ya no se usa), Bun (`bun pm cache rm`) y conda (`conda clean --all`: indices, descargas y paquetes que no usa ningun entorno; los entornos no se tocan). uv, Bun y conda enlazan sus archivos en los proyectos, asi que lo liberado se mide por el espacio libre del disco. Gradle y Cargo no estan a proposito: ya borran solos lo que no se usa (Gradle a los 30 dias; Cargo, desde la version 1.88, a los 3 meses). La cache de Yarn 2+ no se toca (con Plug'n'Play los proyectos leen los paquetes de ahi), ni los modulos de Go. Ademas, NuGet (.NET) y los logs de PM2 (`%USERPROFILE%\.pm2\logs`, o `PM2_HOME` si esta definida) si respondiste S. Si PM2 esta en marcha sus logs se vacian con `pm2 flush` (borrarlos no liberaria nada mientras PM2 los tiene abiertos); si esta detenido se borran directamente
 7. **Logs, volcados de memoria e informes de error de Windows**: logs CBS y DISM, informes de error ya enviados o en cola (`ProgramData\Microsoft\Windows\WER`) y los volcados de memoria de los pantallazos azules (`MEMORY.DMP`, `Minidump`, `LiveKernelReports`). Los volcados solo sirven para averiguar la causa de un pantallazo azul: si hubo uno en los ultimos 7 dias (o no se pudo leer el registro de eventos) se conservan
 8. **Cache de Delivery Optimization**
 9. **Limpieza profunda**, cada parte si respondiste S. Si el Liberador de espacio no termina en 20 minutos, se cierra y la limpieza sigue con lo demas; si una ejecucion se corta a mitad, la siguiente quita el perfil temporal que haya quedado:
@@ -154,7 +154,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
 ### Revision
 
-17. **Revision de salud del equipo** (solo lectura, no cambia nada): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada). Esa busqueda tarda 30-60 s y se hace en segundo plano desde que termina el paso 10, mientras corren los pasos 11 a 16; empieza despues del 10 porque el paso 3 detiene el servicio de Windows Update y los pasos 9 y 10 trabajan con los componentes de Windows. Si esa consulta fallo, se repite aqui. Ademas busca dispositivos con problemas (Administrador de dispositivos), revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
+17. **Revision de salud del equipo** (solo lectura, no cambia nada): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada). Esa busqueda tarda 30-60 s y se hace en segundo plano desde que termina el paso 10, mientras corren los pasos 11 a 16; empieza despues del 10 porque el paso 3 detiene el servicio de Windows Update y los pasos 9 y 10 trabajan con los componentes de Windows. Si esa consulta fallo, se repite aqui. Ademas busca dispositivos con problemas (Administrador de dispositivos), lee del registro de rendimiento de Windows cuanto tardan los arranques y que los retraso, revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
 
 ### Resumen final
 
@@ -179,7 +179,9 @@ Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo. E
   - Ultimo reinicio: aviso si pasaron mas de 14 dias. Con el Inicio rapido de Windows, Apagar no cuenta: solo Reiniciar
   - Recuperacion (WinRE): si el entorno de reparacion de Windows esta activo
   - Reinicio pendiente: si Windows espera un reinicio para terminar actualizaciones
-- **Programas que arrancan con Windows**: los habilitados, en dos columnas (solo informa, no desactiva nada).
+- **Programas que arrancan con Windows**: los habilitados, en dos columnas (solo informa, no desactiva nada). Ademas:
+  - Tiempo de arranque: la mediana de los arranques de los ultimos 30 dias (la mediana, para que un arranque con actualizaciones no cambie la cifra) y la de los 30 a 120 dias anteriores. Aviso si empeoro un 50 % y al menos 15 segundos. Windows guarda cada arranque, asi que no depende de cuantas veces se ejecute la limpieza
+  - Lo que mas retraso el arranque en 30 dias segun Windows (programas, drivers y servicios, sumados): hasta 3, si suman 2 segundos o mas; la lista completa queda en el log. No cuenta las partes de Windows (no se pueden quitar)
 - **Aplicaciones**: cuales se actualizaron, cuales no se pudieron actualizar (con el motivo), cuales siguen pendientes y cuales se saltaron porque se actualizan solas. Si no se pidio actualizar, la lista de las que tienen actualizacion disponible. Si winget no se pudo consultar (sin internet, no instalado), lo dice en rojo en vez de decir que todo esta al dia.
 - **Paquetes de Linux (WSL)** (solo si hay distribuciones con `apt`): por cada distro, cuantos paquetes se actualizaron (con sus versiones si son 15 o menos; si son mas, la lista completa queda en el log), si esta todo al dia o si `apt` fallo (en rojo, con el motivo), y cuantos paquetes quedaron retenidos. Si no se pidio actualizar, solo lo dice.
 
@@ -275,13 +277,16 @@ Pester 3.4 viene con Windows. Si instalaste Pester 5, antes de `Invoke-Pester` c
 |---|---|
 | Sintaxis | Que `limpiar.ps1`, `lib\`, `tests\` y los demas `.ps1` se puedan leer (sin ejecutarlos). |
 | Solo ASCII | Que ningun `.ps1` tenga tildes ni simbolos: Windows PowerShell 5.1 los desfigura. |
-| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`, de las fichas de la papelera y de la lista de dispositivos; el borrado de carpetas y de la papelera (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; las consultas en segundo plano (que no esperen para siempre); el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
+| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`, de las fichas de la papelera, de la lista de dispositivos y de los eventos de arranque (tiempo y retrasos); la medicion de las caches que se limpian con un comando; el borrado de carpetas y de la papelera (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; las consultas en segundo plano (que no esperen para siempre); el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
 | PSScriptAnalyzer | Solo si esta instalado (`Install-Module PSScriptAnalyzer -Scope CurrentUser`). Es opcional. |
 
 Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commit, activa el hook una vez en cada equipo con `git config core.hooksPath .githooks`.
 
 ## Historial de cambios
 
+- **2026-11-27** - Arranque y mas caches de desarrollo:
+  - Resumen: en "Programas que arrancan con Windows", el tiempo de arranque (mediana de 30 dias comparada con los meses anteriores; aviso si empeoro mucho) y lo que mas lo retraso segun Windows. Sale del registro de rendimiento de Windows, que guarda cada arranque.
+  - Paso 6: caches de Composer, uv, Bun y conda, cada una con su comando oficial y solo si la herramienta esta instalada. Gradle y Cargo no se agregan: ya se limpian solos.
 - **2026-11-27** - Mas rapido, papelera y dispositivos:
   - Las consultas que solo esperan a internet corren en segundo plano mientras se hacen otros pasos: la lista de winget (paso 16) desde el inicio y la busqueda de Windows Update (paso 17) desde el paso 10. Ahorran alrededor de un minuto. Si una falla o tarda mas de 5 minutos, se repite como antes.
   - Paso 1: nueva pregunta para vaciar lo que lleva mas de 30 dias en la papelera de reciclaje (solo si pasa de 50 MB), con la lista de lo mas grande. Si una ficha de la papelera ya no tiene su archivo (el Explorador no la muestra), cuenta 0 MB y se quita igual.

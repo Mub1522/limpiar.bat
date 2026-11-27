@@ -15,11 +15,11 @@ function Get-EstadoWinRE($texto) {
     return $null
 }
 
-# Eventos del registro System de los ultimos $dias dias. Devuelve $null si no se pudo leer el registro.
-# Sin try/catch: un error atrapado igual queda escrito en el log.
-function Get-EventosSistema($filtro, $dias) {
+# Eventos del registro System (u otro, con $registro) de los ultimos $dias dias. Devuelve $null si no se pudo
+# leer el registro. Sin try/catch: un error atrapado igual queda escrito en el log.
+function Get-EventosSistema($filtro, $dias, $registro = 'System') {
     $filtro = $filtro.Clone()
-    $filtro.LogName = 'System'
+    $filtro.LogName = $registro
     $filtro.StartTime = (Get-Date).AddDays(-$dias)
     $eventos = @(Get-WinEvent -FilterHashtable $filtro -ErrorAction SilentlyContinue -ErrorVariable errEventos)
     # "No hay eventos" tambien llega como error (en cualquier idioma); se reconoce por su Id
@@ -45,6 +45,76 @@ function Get-CuelguesRecientes($dias = 30) {
         Ultimo           = (@($pantallazos) + @($apagados) | Sort-Object TimeCreated | Select-Object -Last 1).TimeCreated
         UltimoPantallazo = ($pantallazos | Sort-Object TimeCreated | Select-Object -Last 1).TimeCreated
     }
+}
+
+# --- Arranque de Windows (registro Diagnostics-Performance, solo administrador) ---
+# 100 = un arranque (BootTime en ms: desde el encendido hasta el escritorio listo y en calma).
+# 101/102/103 = un programa, driver o servicio que tardo mas de lo normal (DegradationTime en ms).
+# Windows guarda cada arranque (en este equipo, un ano de historia en 1 MB), asi que la tendencia sale de
+# ahi y no de historial.csv, que solo veria un arranque por limpieza.
+
+# Datos de un evento (los <Data Name=...> de su XML) como hashtable
+function ConvertFrom-EventoXml($xml) {
+    $datos = @{}
+    foreach ($d in ([xml]$xml).Event.EventData.Data) { $datos["$($d.Name)"] = "$($d.'#text')" }
+    return $datos
+}
+
+# Eventos de arranque de los ultimos $dias dias, ya leidos: Id, Fecha y Datos. $null si no se pudo leer.
+function Get-EventosArranque($dias = 120) {
+    $eventos = Get-EventosSistema @{ Id = 100, 101, 102, 103 } $dias 'Microsoft-Windows-Diagnostics-Performance/Operational'
+    if ($null -eq $eventos) { return $null }
+    return , @($eventos | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Fecha = $_.TimeCreated; Datos = ConvertFrom-EventoXml $_.ToXml() } })
+}
+
+function Get-Mediana($valores) {
+    $v = @($valores | Sort-Object)
+    if ($v.Count -eq 0) { return $null }
+    $m = [math]::Floor($v.Count / 2)
+    if ($v.Count % 2) { return [double]$v[$m] }
+    return ([double]$v[$m - 1] + [double]$v[$m]) / 2
+}
+
+# Tiempo de arranque: mediana de los ultimos 30 dias frente a la de 30 a 120 dias atras (mediana y no
+# promedio: un arranque con actualizaciones dura minutos y no dice nada del resto). Nivel AVISO solo si
+# empeoro 50 % y al menos 15 s, con 3 arranques o mas en cada periodo; asi no salta por arranques sueltos.
+function Get-ResumenArranque($eventos, $ahora = (Get-Date)) {
+    $arranques = @($eventos | Where-Object { $_.Id -eq 100 -and [double]$_.Datos.BootTime -gt 0 } |
+        ForEach-Object { [pscustomobject]@{ Fecha = $_.Fecha; Segundos = [double]$_.Datos.BootTime / 1000 } })
+    if ($arranques.Count -eq 0) { return $null }
+    $recientes = @($arranques | Where-Object { $_.Fecha -gt $ahora.AddDays(-30) })
+    $anteriores = @($arranques | Where-Object { $_.Fecha -le $ahora.AddDays(-30) })
+    $mediana = if ($recientes.Count -ge 3) { Get-Mediana $recientes.Segundos } else { $null }
+    $medianaAntes = if ($anteriores.Count -ge 3) { Get-Mediana $anteriores.Segundos } else { $null }
+    [pscustomobject]@{
+        Ultimo       = ($arranques | Sort-Object Fecha | Select-Object -Last 1).Segundos
+        Mediana      = $mediana
+        Cantidad     = $recientes.Count
+        MedianaAntes = $medianaAntes
+        MasLento     = [bool]($mediana -and $medianaAntes -and $mediana -ge 1.5 * $medianaAntes -and $mediana - $medianaAntes -ge 15)
+    }
+}
+
+# Lo que mas retraso el arranque en los ultimos $dias dias (eventos 101-103), sumado por programa, del que
+# mas al que menos. No cuenta lo que es parte de Windows (en la carpeta de Windows o de Defender, y los
+# drivers de Microsoft): no se puede quitar, y llenaria la lista de dwm.exe y svchost.exe.
+function Select-RetrasosArranque($eventos, $dias = 30, $ahora = (Get-Date)) {
+    $sistema = @($env:SystemRoot, "$env:ProgramData\Microsoft\Windows Defender") | Where-Object { $_ } | ForEach-Object { "$_\" }
+    $propios = @($eventos | Where-Object { $_.Id -in 101, 102, 103 -and $_.Fecha -gt $ahora.AddDays(-$dias) } | Where-Object {
+        $ruta = "$($_.Datos.Path)"
+        if ($_.Id -eq 102) { "$($_.Datos.CompanyName)" -notmatch '^Microsoft' }
+        else { -not ($sistema | Where-Object { $ruta.StartsWith($_, 'OrdinalIgnoreCase') }) }
+    })
+    return , @($propios | Group-Object { "$($_.Datos.Name)" } | ForEach-Object {
+        $e = $_.Group[0]
+        $tipo = switch ($e.Id) { 101 { 'programa' } 102 { 'driver' } default { 'servicio' } }
+        [pscustomobject]@{
+            Nombre   = if ($e.Datos.FriendlyName) { $e.Datos.FriendlyName } else { $e.Datos.Name }
+            Tipo     = $tipo
+            Veces    = $_.Count
+            Segundos = ($_.Group | ForEach-Object { [double]$_.Datos.DegradationTime } | Measure-Object -Sum).Sum / 1000
+        }
+    } | Sort-Object Segundos -Descending)
 }
 
 # Errores de hardware que Windows registra (WHEA): memoria RAM, CPU, PCIe, discos.
@@ -278,6 +348,24 @@ function Get-SaludEquipo($discoC, $esAdmin, $wu = $null) {
         Log "  errores de hardware (WHEA) en 30 dias: $($hardware.Graves) grave(s), $($hardware.Corregidos) corregido(s)" DarkYellow
     }
 
+    # Arranque: el registro de rendimiento solo se puede leer como administrador
+    $arranque = $null
+    $retrasos = $null
+    if ($esAdmin) {
+        $eventosArranque = Get-EventosArranque 120
+        if ($null -eq $eventosArranque) { Log "  no se pudo leer el registro de arranques (Diagnostics-Performance)" DarkYellow }
+        else {
+            $arranque = Get-ResumenArranque $eventosArranque
+            $retrasos = Select-RetrasosArranque $eventosArranque 30
+            if ($arranque) {
+                Log ("  arranque: ultimo {0:N0} s; mediana 30 dias {1}; 30-120 dias atras {2}" -f $arranque.Ultimo,
+                    $(if ($arranque.Mediana) { '{0:N0} s ({1} arranques)' -f $arranque.Mediana, $arranque.Cantidad } else { 'sin datos suficientes' }),
+                    $(if ($arranque.MedianaAntes) { '{0:N0} s' -f $arranque.MedianaAntes } else { 'sin datos' })) DarkGray
+            }
+            foreach ($r in $retrasos) { Log ("  retraso el arranque (30 dias): {0} ({1}), +{2:N1} s en {3} arranque(s)" -f $r.Nombre, $r.Tipo, $r.Segundos, $r.Veces) DarkGray }
+        }
+    }
+
     $dispositivos = Get-DispositivosConProblema
     if ($null -eq $dispositivos) { Log "  no se pudo leer la lista de dispositivos" DarkYellow }
     foreach ($d in $dispositivos) {
@@ -294,6 +382,8 @@ function Get-SaludEquipo($discoC, $esAdmin, $wu = $null) {
         Cuelgues          = Get-CuelguesRecientes 30
         Hardware          = $hardware
         Dispositivos      = $dispositivos
+        Arranque          = $arranque
+        RetrasosArranque  = $retrasos
         Defender          = Get-EstadoDefender
         Seguridad         = Get-EstadoSeguridad $esAdmin
         Respaldo          = Get-EstadoRespaldo $esAdmin

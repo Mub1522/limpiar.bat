@@ -424,7 +424,25 @@ function Show-Resumen($d) {
     # --- Programas de inicio ---
     $inicio = @($d.Inicio)
     Write-Seccion "PROGRAMAS QUE ARRANCAN CON WINDOWS ($($inicio.Count))"
+    # Tiempo de arranque (registro de rendimiento de Windows, solo administrador)
+    $ar = $salud.Arranque
+    if ($d.EsAdmin) {
+        if (-not $ar) { Write-Estado 'NA' 'Tiempo de arranque' 'no se pudo leer (ver log)' }
+        elseif (-not $ar.Mediana) { Write-Estado 'INFO' 'Tiempo de arranque' ('ultimo {0:N0} s; pocos arranques en 30 dias para comparar' -f $ar.Ultimo) }
+        else {
+            $textoAr = '{0:N0} s (mediana de {1} arranques en 30 dias)' -f $ar.Mediana, $ar.Cantidad
+            if ($ar.MedianaAntes) { $textoAr += '; antes {0:N0} s' -f $ar.MedianaAntes }
+            if ($ar.MasLento) { Write-Estado 'AVISO' 'Tiempo de arranque' "$($textoAr): arranca mas lento; abajo, lo que mas lo retrasa" }
+            else { Write-Estado 'OK' 'Tiempo de arranque' $textoAr }
+        }
+    }
     Write-Lista ($inicio | ForEach-Object { $_.Name })
+    # Lo que mas retraso el arranque segun Windows: hasta 3, solo si suman 2 s o mas (el resto, en el log)
+    $retrasos = @($salud.RetrasosArranque | Where-Object { $_.Segundos -ge 2 } | Select-Object -First 3)
+    if ($retrasos) {
+        Write-Nota 'Lo que mas retraso el arranque en 30 dias (segun Windows):' Gray
+        foreach ($r in $retrasos) { Write-Dato "$($r.Nombre) ($($r.Tipo))" ('+{0:N0} s en {1} arranque(s)' -f $r.Segundos, $r.Veces) White }
+    }
     Write-Nota 'Para desactivar: Administrador de tareas (Ctrl+Shift+Esc) > Aplicaciones de arranque'
 
     # --- Aplicaciones ---

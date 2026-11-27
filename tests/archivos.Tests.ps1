@@ -106,6 +106,18 @@ Describe 'Format-Tamano' {
     }
 }
 
+Describe 'Invoke-LimpiezaComando (paso 6)' {
+    # En lugar de un programa real (composer, go...), una funcion que borra un archivo de la carpeta de prueba
+    function Remove-CachePrueba { Remove-Item "$TestDrive\cachecmd\a.bin" }
+
+    It 'mide lo liberado por lo que achico la carpeta' {
+        New-ArchivoPrueba "$TestDrive\cachecmd\a.bin" 2MB
+        New-ArchivoPrueba "$TestDrive\cachecmd\b.bin" 1MB
+        Invoke-LimpiezaComando 'prueba' "$TestDrive\cachecmd" 'Remove-CachePrueba' @() | Should Be 2
+        Test-Path "$TestDrive\cachecmd\b.bin" | Should Be $true
+    }
+}
+
 # Ficha $I de la papelera (formato de Windows 10+): version 2, tamano, fecha del borrado y ruta original
 function New-FichaPapelera($rutaOriginal, $bytes, $fechaBorrado) {
     $ms = New-Object IO.MemoryStream

@@ -183,6 +183,102 @@ Describe 'ConvertFrom-FichaPapelera (paso 1)' {
     }
 }
 
+Describe 'ConvertFrom-EventoXml (paso 17, arranque)' {
+    It 'lee los datos del evento por nombre' {
+        $d = ConvertFrom-EventoXml ((Get-Muestra 'evento-arranque-101.xml') -join "`n")
+        $d.FriendlyName | Should Be 'Programa de ejemplo'
+        $d.DegradationTime | Should Be '2076'
+        $d.Path | Should Be 'C:\Programas\Ejemplo\ejemplo.exe'
+    }
+}
+
+# Evento de arranque ya leido (como lo devuelve Get-EventosArranque)
+function New-EventoArranque($id, $diasAtras, $datos) {
+    [pscustomobject]@{ Id = $id; Fecha = (Get-Date).AddDays(-$diasAtras); Datos = $datos }
+}
+
+Describe 'Get-Mediana' {
+    It 'impar: el del medio; par: el promedio de los dos del medio; vacio: $null' {
+        Get-Mediana @(3, 1, 2) | Should Be 2
+        Get-Mediana @(4, 1, 3, 2) | Should Be 2.5
+        Get-Mediana @() | Should BeNullOrEmpty
+    }
+}
+
+Describe 'Get-ResumenArranque (paso 17)' {
+    It 'avisa si la mediana de 30 dias empeoro 50 % y al menos 15 s' {
+        $ev = @(1, 3, 5, 7 | ForEach-Object { New-EventoArranque 100 $_ @{ BootTime = '90000' } }) +
+              @(40, 50, 60, 70 | ForEach-Object { New-EventoArranque 100 $_ @{ BootTime = '60000' } })
+        $r = Get-ResumenArranque $ev
+        $r.Mediana | Should Be 90
+        $r.MedianaAntes | Should Be 60
+        $r.Cantidad | Should Be 4
+        $r.Ultimo | Should Be 90
+        $r.MasLento | Should Be $true
+    }
+
+    It 'no avisa por una diferencia chica ni por un arranque suelto lento (usa la mediana)' {
+        $ev = @(1, 3, 5 | ForEach-Object { New-EventoArranque 100 $_ @{ BootTime = '70000' } }) +
+              @(New-EventoArranque 100 2 @{ BootTime = '400000' }) +
+              @(40, 50, 60 | ForEach-Object { New-EventoArranque 100 $_ @{ BootTime = '60000' } })
+        $r = Get-ResumenArranque $ev
+        $r.Mediana | Should Be 70
+        $r.MasLento | Should Be $false
+    }
+
+    It 'no avisa si empeoro 15 s o mas pero menos del 50 %' {
+        $ev = @(1, 3, 5 | ForEach-Object { New-EventoArranque 100 $_ @{ BootTime = '100000' } }) +
+              @(40, 50, 60 | ForEach-Object { New-EventoArranque 100 $_ @{ BootTime = '80000' } })
+        (Get-ResumenArranque $ev).MasLento | Should Be $false
+    }
+
+    It 'con menos de 3 arranques en 30 dias no compara (solo el ultimo)' {
+        $ev = @(
+            New-EventoArranque 100 1 @{ BootTime = '50000' }
+            New-EventoArranque 100 4 @{ BootTime = '80000' }
+        )
+        $r = Get-ResumenArranque $ev
+        $r.Mediana | Should BeNullOrEmpty
+        $r.Ultimo | Should Be 50
+        $r.MasLento | Should Be $false
+    }
+
+    It 'sin arranques devuelve $null' {
+        Get-ResumenArranque @(New-EventoArranque 101 1 @{ DegradationTime = '1000' }) | Should BeNullOrEmpty
+    }
+}
+
+Describe 'Select-RetrasosArranque (paso 17)' {
+    $ev = @(
+        New-EventoArranque 101 2 @{ Name = 'app.exe'; FriendlyName = 'App lenta'; DegradationTime = '3000'; Path = 'C:\Programas\App\app.exe' }
+        New-EventoArranque 101 9 @{ Name = 'app.exe'; FriendlyName = 'App lenta'; DegradationTime = '4000'; Path = 'C:\Programas\App\app.exe' }
+        New-EventoArranque 101 3 @{ Name = 'otra.exe'; FriendlyName = 'Otra'; DegradationTime = '9000'; Path = 'D:\Otra\otra.exe' }
+        New-EventoArranque 101 3 @{ Name = 'dwm.exe'; FriendlyName = 'dwm'; DegradationTime = '9999'; Path = "$env:SystemRoot\System32\dwm.exe" }
+        New-EventoArranque 101 3 @{ Name = 'MsMpEng.exe'; DegradationTime = '9999'; Path = "$env:ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe" }
+        New-EventoArranque 102 3 @{ Name = 'msdriver'; DegradationTime = '9999'; CompanyName = 'Microsoft Corporation'; Path = "$env:SystemRoot\System32\drivers\x.sys" }
+        New-EventoArranque 102 3 @{ Name = 'antitrampas'; FriendlyName = 'Driver de un juego'; DegradationTime = '1500'; CompanyName = 'Juegos SA'; Path = "$env:SystemRoot\System32\drivers\a.sys" }
+        New-EventoArranque 101 45 @{ Name = 'vieja.exe'; DegradationTime = '99999'; Path = 'C:\Programas\vieja.exe' }
+    )
+    $r = Select-RetrasosArranque $ev 30
+
+    It 'suma por programa y ordena del que mas retraso al que menos' {
+        $r[0].Nombre | Should Be 'Otra'
+        $r[1].Nombre | Should Be 'App lenta'
+        $r[1].Segundos | Should Be 7
+        $r[1].Veces | Should Be 2
+    }
+
+    It 'no cuenta lo de Windows ni de Defender, ni los drivers de Microsoft, ni lo de hace mas de 30 dias' {
+        $r.Count | Should Be 3
+        @($r | Where-Object { $_.Nombre -in 'dwm', 'MsMpEng.exe', 'msdriver', 'vieja.exe' }).Count | Should Be 0
+    }
+
+    It 'si cuenta los drivers que no son de Microsoft aunque esten en la carpeta de Windows' {
+        $r[2].Nombre | Should Be 'Driver de un juego'
+        $r[2].Tipo | Should Be 'driver'
+    }
+}
+
 Describe 'Select-DispositivosConProblema (paso 17)' {
     $lista = @(
         [pscustomobject]@{ Name = 'Teclado'; ConfigManagerErrorCode = 0; PNPClass = 'Keyboard'; PNPDeviceID = 'HID\A' }
