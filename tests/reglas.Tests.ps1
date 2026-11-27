@@ -39,7 +39,9 @@ Describe 'Lo que el script no hace (CLAUDE.md 2.2)' {
         @{ Patron = 'Write-Host[^\r\n]*-NoNewline'; Motivo = 'el transcript de PS 5.1 corta la linea (CLAUDE.md 6.2)' },
         @{ Patron = 'wsl\.exe[^\r\n]*\|\s*Select-Object\s+-First'; Motivo = 'mata wsl.exe y deja la consola en escalera (CLAUDE.md 6.1)' },
         @{ Patron = 'Remove-Item[^\r\n]*(Windows\.old|WINDOWS\.~)'; Motivo = 'los restos de actualizacion solo los borra el Liberador de espacio' },
-        @{ Patron = 'Clear-RecycleBin|SHEmptyRecycleBin'; Motivo = 'vacian la papelera entera: solo se borra lo de mas de $diasPapelera dias' }
+        @{ Patron = 'Clear-RecycleBin|SHEmptyRecycleBin'; Motivo = 'vacian la papelera entera: solo se borra lo de mas de $diasPapelera dias' },
+        @{ Patron = 'Remove-Item[^\r\n]*node_modules'; Motivo = 'los node_modules viejos solo se informan: decide el usuario' },
+        @{ Patron = '&\s*powercfg(\.exe)?[^\r\n]*\s[/-]h(ibernate)?\b'; Motivo = 'la hibernacion solo se informa: el script no cambia la configuracion de energia' }
     )
     foreach ($p in $prohibidos) {
         It "no usa /$($p.Patron)/: $($p.Motivo)" {
@@ -85,7 +87,7 @@ Describe 'Un clic en la ventana no detiene la limpieza (edicion rapida, CLAUDE.m
     It 'la apaga despues de las preguntas y antes del paso 1' {
         $apaga = & $posicion '(?m)^\$modoConsola = Disable-EdicionRapida'
         ($apaga -gt (& $posicion 'Read-SiNo \$preguntas')) | Should Be $true
-        ($apaga -lt (& $posicion '(?m)^Log "Paso 1:')) | Should Be $true
+        ($apaga -lt (& $posicion '(?m)^Start-Paso 1 ')) | Should Be $true
     }
     It 'la devuelve despues del log y antes de esperar el Enter' {
         $devuelve = & $posicion '(?m)^Restore-ModoConsola \$modoConsola'

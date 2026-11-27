@@ -26,6 +26,11 @@ $script:fuenteHtml = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif
 
 # --- Piezas basicas ---
 
+# Tamano legible: en GB desde 1000 MB, porque "1.010 MB" se confunde con 1 MB por el separador de miles
+function Format-Tamano($bytes) {
+    if ($bytes -ge 1000MB) { return '{0:N2} GB' -f ($bytes / 1GB) }
+    return '{0:N0} MB' -f ($bytes / 1MB)
+}
 # Solo consola (y log). Siempre una linea completa de un solo color: el log de PowerShell 5.1
 # corta la linea cada vez que se usa -NoNewline, asi que no se mezclan colores en una misma linea.
 function Out-Resumen([string]$texto = '', $color = 'Gray') {
@@ -203,6 +208,15 @@ function Show-Resumen($d) {
     $liberadoTexto = if ($d.Total -ge 1000) { '{0:N2} GB' -f ($d.Total / 1024) } else { '{0:N0} MB' -f $d.Total }
     Write-Dato 'Liberado por la limpieza' $liberadoTexto Green
     Write-Dato 'Espacio libre en C:' ('{0:N1} -> {1:N1} GB ({2}{3:N1} GB)' -f ($d.LibreInicio / 1GB), ($d.LibreFin / 1GB), $signo, $delta)
+    # Cuanto tardo (sin contar las preguntas) y si algun paso que hace siempre lo mismo tardo el triple de lo normal
+    if ($d.SegundosLimpieza) {
+        $lento = @($d.PasosLentos)[0]
+        if ($lento) {
+            Write-Estado 'AVISO' 'Duracion' ('{0:N0} min; el paso {1} tardo {2:N0} min y lo normal es {3:N0} min (ver log)' -f ($d.SegundosLimpieza / 60), $lento.Paso, ($lento.Segundos / 60), [math]::Max(1, $lento.Normal / 60))
+        } else {
+            Write-Dato 'Duracion' ('{0:N0} min' -f [math]::Max(1, $d.SegundosLimpieza / 60)) White
+        }
+    }
 
     # Comparacion con la limpieza anterior (historial.csv)
     if ($d.Anterior) {
@@ -249,6 +263,27 @@ function Show-Resumen($d) {
     foreach ($c in $d.Compactados) {
         if ($c.Ok) { Write-Dato "Disco virtual $($c.Nombre)" ('{0:N2} GB -> {1:N2} GB' -f ($c.Antes / 1GB), ($c.Despues / 1GB)) Green }
         else { Write-Dato "Disco virtual $($c.Nombre)" 'no se pudo compactar (ver log)' Red }
+    }
+    # Espacio que el script no libera pero conviene conocer (solo informa)
+    # node_modules viejos: solo desde 200 MB en total (menos no vale la pena; la lista siempre queda en el log)
+    $nm = $d.NodeModulesViejos
+    $proyectos = if ($nm) { @($nm.Proyectos) } else { @() }
+    $bytesNm = [double]($proyectos | Measure-Object Bytes -Sum).Sum
+    if ($bytesNm -ge 200MB) {
+        $textoNm = '{0} en {1} proyecto(s)' -f (Format-Tamano $bytesNm), $proyectos.Count
+        if ($nm.Incompleto) { $textoNm += ' o mas' }
+        Write-Dato 'node_modules sin usar' $textoNm White
+        $carpetaUsuario = [Environment]::GetFolderPath('UserProfile')
+        $mayores = $proyectos | Select-Object -First 3 | ForEach-Object { "$($_.Proyecto -replace [regex]::Escape($carpetaUsuario), '~') ($(Format-Tamano $_.Bytes))" }
+        Write-Nota ("Proyectos sin cambios en 90 dias: " + ($mayores -join '; ') + '. Se borran a mano y se recuperan con npm install (lista completa en el log)')
+    }
+    $hib = $d.Salud.Hibernacion
+    if ($hib -and $hib.Bytes -gt 0) {
+        Write-Dato 'Hibernacion (hiberfil.sys)' (Format-Tamano $hib.Bytes) White
+        # Tipo completo: ~40 % de la RAM; reducido (solo para el Inicio rapido): ~20 %
+        if ($hib.RamBytes -gt 0 -and $hib.Bytes -gt 0.3 * $hib.RamBytes) {
+            Write-Nota "Si no usas Hibernar: 'powercfg /h /type reduced' como administrador lo reduce a la mitad y mantiene el Inicio rapido"
+        }
     }
 
     # --- Salud del equipo (hardware) ---
@@ -308,6 +343,11 @@ function Show-Resumen($d) {
         Write-Estado $nivel 'Bateria' "$($salud.Bateria.Salud)% de la capacidad original ($($salud.Bateria.Ciclos) ciclos)"
     }
 
+    # Plan de energia: "Ahorro de energia" limita el procesador (solo informa: en un portatil puede ser a proposito)
+    $plan = $salud.PlanEnergia
+    if ($plan -and $plan.AhorroEnergia) { Write-Estado 'INFO' 'Plan de energia' "$($plan.Nombre): limita el procesador; para mas rendimiento usa Equilibrado" }
+    elseif ($plan) { Write-Estado 'OK' 'Plan de energia' $plan.Nombre }
+
     # Errores de hardware (WHEA): los graves siempre avisan; los corregidos solo si son muchos
     $h = $salud.Hardware
     if ($null -eq $h) { Write-Estado 'NA' 'Hardware (30 dias)' 'no se pudo leer el registro de eventos' }
@@ -343,6 +383,20 @@ function Show-Resumen($d) {
         if ($c.OtrosApagados) { $partes += "$($c.OtrosApagados) apagado(s) inesperado(s)" }
         Write-Estado 'AVISO' 'Cuelgues (30 dias)' (($partes -join ' y ') + ('; ultimo {0:dd/MM HH:mm}' -f $c.Ultimo))
     }
+
+    # Apps que se cerraron solas o se colgaron 3 veces o mas en 7 dias (solo informa: suele ser la app, no el equipo)
+    $af = $salud.AppsQueFallan
+    if ($null -eq $af) { Write-Estado 'NA' 'Apps que fallan' 'no se pudo leer el registro de eventos' }
+    elseif (@($af).Count -eq 0) { Write-Estado 'OK' 'Apps que fallan' 'ninguna se cerro sola ni se colgo 3 veces o mas en 7 dias' }
+    else {
+        $textoAf = (@($af) | Select-Object -First 3 | ForEach-Object { "$($_.App) ($($_.Veces) veces)" }) -join ', '
+        Write-Estado 'INFO' 'Apps que fallan' "en 7 dias: $($textoAf). Si molesta, actualiza o reinstala esa app"
+    }
+
+    # Ultima prueba de memoria de Windows (mdsched): solo si alguna vez se hizo
+    $pm = $salud.PruebaMemoria
+    if ($pm -and $pm.ConErrores) { Write-Estado 'AVISO' 'Memoria RAM' ('la ultima prueba de memoria ({0:dd/MM/yyyy}) encontro errores: revisa o cambia la RAM' -f $pm.Fecha) }
+    elseif ($pm) { Write-Estado 'OK' 'Memoria RAM' ('sin errores en la ultima prueba de memoria ({0:dd/MM/yyyy})' -f $pm.Fecha) }
 
     # --- Windows y seguridad ---
     Write-Seccion 'WINDOWS Y SEGURIDAD'

@@ -51,6 +51,72 @@ Describe 'Add-Ejecucion y Get-UltimaEjecucion' {
     }
 }
 
+Describe 'Duracion de los pasos en el historial (P3)' {
+    It 'convierte la duracion de cada paso a texto y de vuelta' {
+        $pasos = [ordered]@{ '1' = 12; '2' = 3; '10' = 1520 }
+        ConvertTo-TextoPasos $pasos | Should Be '1=12 2=3 10=1520'
+        $leidos = ConvertFrom-TextoPasos '1=12 2=3 10=1520'
+        $leidos['10'] | Should Be 1520
+        (ConvertFrom-TextoPasos '').Count | Should Be 0
+    }
+
+    It 'agrega Minutos y Pasos sin perderlos en un historial anterior a esas columnas' {
+        $ruta = "TestDrive:\hist-pasos.csv"
+        New-HistorialPrueba $ruta @(@{ Dias = 5; LibreGB = 100 })
+        Add-Ejecucion $ruta 1 (100 * 1GB) 0 ([ordered]@{ '1' = 60; '2' = 120 }) | Should Be 2
+        $filas = @(Import-Csv $ruta -Delimiter ';')
+        $filas[1].Pasos | Should Be '1=60 2=120'
+        $filas[1].Minutos | Should Be '3'
+        $filas[0].Pasos | Should Be ''
+        Get-UltimaEjecucion $ruta | Should Not BeNullOrEmpty
+    }
+
+    # Historial con la duracion del paso 7 en cada ejecucion anterior
+    function New-HistorialPasos($ruta, $segundosPaso7) {
+        Remove-Item $ruta -ErrorAction SilentlyContinue
+        foreach ($s in $segundosPaso7) { Add-Ejecucion $ruta 1 (100 * 1GB) 0 ([ordered]@{ '7' = $s; '10' = 30 }) | Out-Null }
+    }
+
+    It 'avisa si un paso fijo tardo el triple de lo normal y al menos 2 minutos mas' {
+        $ruta = "TestDrive:\lentos1.csv"
+        New-HistorialPasos $ruta @(60, 50, 70)
+        $lentos = @(Get-PasosLentos $ruta @{ '7' = 540 })
+        $lentos.Count | Should Be 1
+        $lentos[0].Paso | Should Be 7
+        $lentos[0].Normal | Should Be 60
+    }
+
+    It 'no avisa por poco (menos del triple o menos de 2 minutos de diferencia)' {
+        $ruta = "TestDrive:\lentos2.csv"
+        New-HistorialPasos $ruta @(60, 60, 60)
+        @(Get-PasosLentos $ruta @{ '7' = 170 }).Count | Should Be 0
+        New-HistorialPasos $ruta @(10, 10, 10)
+        @(Get-PasosLentos $ruta @{ '7' = 100 }).Count | Should Be 0
+        New-HistorialPasos $ruta @(100, 100, 100)
+        @(Get-PasosLentos $ruta @{ '7' = 250 }).Count | Should Be 0
+    }
+
+    It 'no compara los pasos que dependen de una respuesta, ni con menos de 3 ejecuciones' {
+        $ruta = "TestDrive:\lentos3.csv"
+        New-HistorialPasos $ruta @(60, 60, 60)
+        @(Get-PasosLentos $ruta @{ '10' = 3600 }).Count | Should Be 0
+        New-HistorialPasos $ruta @(60, 60)
+        @(Get-PasosLentos $ruta @{ '7' = 900 }).Count | Should Be 0
+    }
+}
+
+Describe 'Start-Paso y Stop-Paso (P3)' {
+    It 'guarda cuanto tardo cada paso, por numero' {
+        $script:duracionPasos = [ordered]@{}
+        $script:pasoActual = $null
+        Start-Paso 1 'Paso 1: prueba'
+        Start-Paso 2 'Paso 2: prueba'
+        Stop-Paso
+        @($script:duracionPasos.Keys) -join ',' | Should Be '1,2'
+        $script:duracionPasos['1'] | Should BeOfType [int]
+    }
+}
+
 Describe 'Get-TendenciaEspacio' {
     $tamano = 500GB
 

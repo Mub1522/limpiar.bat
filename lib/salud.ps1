@@ -117,6 +117,46 @@ function Select-RetrasosArranque($eventos, $dias = 30, $ahora = (Get-Date)) {
     } | Sort-Object Segundos -Descending)
 }
 
+# Plan de energia activo, de la salida de "powercfg /getactivescheme" (en cualquier idioma: se busca el GUID y
+# el nombre entre parentesis). AhorroEnergia: es el plan "Ahorro de energia" de Windows, que limita el
+# procesador. Un plan personalizado se muestra con su nombre. $null si no se reconoce.
+function ConvertFrom-PlanEnergia($texto) {
+    if ("$texto" -notmatch '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*\(([^)]*)\)') { return $null }
+    [pscustomobject]@{
+        Guid          = $Matches[1].ToLower()
+        Nombre        = $Matches[2].Trim()
+        AhorroEnergia = $Matches[1] -eq 'a1841308-3541-4fab-bc81-f71556f20b4a'
+    }
+}
+
+# Apps que se cerraron solas (Application Error, 1000) o se colgaron (Application Hang, 1002) al menos
+# $minimo veces, de la que mas a la que menos. $fallos: objetos con App (nombre del .exe).
+function Select-AppsQueFallan($fallos, $minimo = 3) {
+    return , @($fallos | Group-Object App | Where-Object { $_.Count -ge $minimo } | Sort-Object Count -Descending |
+        ForEach-Object { [pscustomobject]@{ App = $_.Name; Veces = $_.Count } })
+}
+
+# Lee los fallos de apps de los ultimos $dias dias. $null si no se pudo leer el registro Application.
+function Get-AppsQueFallan($dias = 7) {
+    $eventos = Get-EventosSistema @{ ProviderName = 'Application Error', 'Application Hang'; Id = 1000, 1002 } $dias 'Application'
+    if ($null -eq $eventos) { return $null }
+    # El primer dato del evento es el nombre del .exe
+    return , (Select-AppsQueFallan @($eventos | ForEach-Object { [pscustomobject]@{ App = "$($_.Properties[0].Value)" } }))
+}
+
+# Resultado de la ultima prueba del Diagnostico de memoria de Windows (mdsched), de sus eventos en System:
+# 1101/1201 = sin errores; 1102/1202 = encontro errores de hardware. $null si nunca se hizo.
+function Select-UltimaPruebaMemoria($eventos) {
+    $ultima = $eventos | Where-Object { $_.Id -in 1101, 1102, 1201, 1202 } | Sort-Object Fecha | Select-Object -Last 1
+    if (-not $ultima) { return $null }
+    [pscustomobject]@{ Fecha = $ultima.Fecha; ConErrores = $ultima.Id -in 1102, 1202 }
+}
+
+function Get-UltimaPruebaMemoria {
+    $eventos = Get-EventosSistema @{ ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results' } 3650
+    Select-UltimaPruebaMemoria @($eventos | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Fecha = $_.TimeCreated } })
+}
+
 # Errores de hardware que Windows registra (WHEA): memoria RAM, CPU, PCIe, discos.
 #   Nivel 2 (error) = no se pudo corregir: grave.
 #   Nivel 3 (advertencia) = el hardware lo corrigio: unos pocos son normales; muchos anuncian una falla.
@@ -366,6 +406,18 @@ function Get-SaludEquipo($discoC, $esAdmin, $wu = $null) {
         }
     }
 
+    $plan = ConvertFrom-PlanEnergia ((& powercfg.exe /getactivescheme 2>$null) -join ' ')
+    if ($plan) { Log "  plan de energia: $($plan.Nombre) ($($plan.Guid))" DarkGray }
+    $appsQueFallan = Get-AppsQueFallan 7
+    foreach ($a in $appsQueFallan) { Log "  se cerro sola o se colgo en 7 dias: $($a.App) ($($a.Veces) veces)" DarkGray }
+    $pruebaMemoria = Get-UltimaPruebaMemoria
+    if ($pruebaMemoria) { Log ("  ultima prueba de memoria de Windows: {0:dd/MM/yyyy}, {1}" -f $pruebaMemoria.Fecha, $(if ($pruebaMemoria.ConErrores) { 'CON errores' } else { 'sin errores' })) DarkGray }
+    # Archivo de hibernacion: ocupa una parte de la RAM en C: (solo informa)
+    $hiberfil = Get-Item -LiteralPath "$env:SystemDrive\hiberfil.sys" -Force -ErrorAction SilentlyContinue
+    $hibernacion = if ($hiberfil) {
+        [pscustomobject]@{ Bytes = [double]$hiberfil.Length; RamBytes = [double](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).TotalPhysicalMemory }
+    }
+
     $dispositivos = Get-DispositivosConProblema
     if ($null -eq $dispositivos) { Log "  no se pudo leer la lista de dispositivos" DarkYellow }
     foreach ($d in $dispositivos) {
@@ -384,6 +436,10 @@ function Get-SaludEquipo($discoC, $esAdmin, $wu = $null) {
         Dispositivos      = $dispositivos
         Arranque          = $arranque
         RetrasosArranque  = $retrasos
+        PlanEnergia       = $plan
+        AppsQueFallan     = $appsQueFallan
+        PruebaMemoria     = $pruebaMemoria
+        Hibernacion       = $hibernacion
         Defender          = Get-EstadoDefender
         Seguridad         = Get-EstadoSeguridad $esAdmin
         Respaldo          = Get-EstadoRespaldo $esAdmin

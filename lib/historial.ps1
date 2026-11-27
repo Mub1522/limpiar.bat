@@ -27,22 +27,66 @@ function Get-UltimaEjecucion($ruta) {
     }
 }
 
-# Agrega la ejecucion actual al final y recorta a las ultimas $maxHistorial
-function Add-Ejecucion($ruta, $liberadoMB, $libreFinBytes, $avisos) {
+# Columnas del CSV. Minutos y Pasos se agregaron el 2026-11-27: las filas anteriores quedan vacias ahi.
+$script:columnasHistorial = 'Fecha', 'LiberadoMB', 'LibreFinGB', 'Avisos', 'Minutos', 'Pasos'
+
+# Duracion de cada paso <-> texto del CSV: "1=12 2=3 10=1520" (numero de paso = segundos)
+function ConvertTo-TextoPasos($pasos) {
+    if (-not $pasos) { return '' }
+    (@($pasos.Keys) | ForEach-Object { "$_=$([int]$pasos[$_])" }) -join ' '
+}
+function ConvertFrom-TextoPasos($texto) {
+    $pasos = @{}
+    foreach ($par in "$texto" -split '\s+') {
+        if ($par -match '^(\d+)=(\d+)$') { $pasos[$Matches[1]] = [int]$Matches[2] }
+    }
+    return $pasos
+}
+
+# Agrega la ejecucion actual al final y recorta a las ultimas $maxHistorial.
+# $pasos: duracion de cada paso en segundos (hashtable numero -> segundos)
+function Add-Ejecucion($ruta, $liberadoMB, $libreFinBytes, $avisos, $pasos = $null) {
     $c = $script:culturaHistorial
+    $segundos = if ($pasos) { (@($pasos.Values) | Measure-Object -Sum).Sum } else { 0 }
     $nueva = [pscustomobject]@{
         Fecha      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', $c)
         LiberadoMB = ([math]::Round($liberadoMB, 2)).ToString($c)
         LibreFinGB = ([math]::Round($libreFinBytes / 1GB, 2)).ToString($c)
         Avisos     = "$avisos"
+        Minutos    = if ($pasos) { ([math]::Round($segundos / 60, 1)).ToString($c) } else { '' }
+        Pasos      = ConvertTo-TextoPasos $pasos
     }
     $filas = @()
     if (Test-Path $ruta) { $filas = @(Import-Csv $ruta -Delimiter ';') }
     # @() por fuera: con una sola fila Select-Object devuelve el objeto suelto y en PS 5.1
-    # un PSCustomObject suelto no tiene .Count (el log mostraba "( registrada(s)")
-    $filas = @(@($filas + $nueva) | Select-Object -Last $script:maxHistorial)
+    # un PSCustomObject suelto no tiene .Count (el log mostraba "( registrada(s)").
+    # Todas las filas con las mismas columnas: Export-Csv toma las de la primera fila, y en un historial
+    # anterior a Minutos/Pasos esas columnas se perderian.
+    $filas = @(@($filas + $nueva) | Select-Object -Last $script:maxHistorial | Select-Object $script:columnasHistorial)
     $filas | Export-Csv $ruta -Delimiter ';' -NoTypeInformation -Encoding UTF8
     return $filas.Count
+}
+
+# Pasos que esta vez tardaron mucho mas de lo normal: al menos el triple de la mediana de las ultimas 10
+# ejecuciones con datos (hacen falta 3) y 2 minutos mas. Solo los pasos que hacen lo mismo en cada ejecucion
+# ($pasosFijos): los que dependen de una respuesta (DISM, reparacion, WSL...) varian de minutos a una hora.
+# Es lo que habria mostrado el Liberador de espacio trabado (24/11/2026) si se pudiera comparar.
+function Get-PasosLentos($ruta, $pasos, $pasosFijos = @(2, 3, 5, 7, 8, 14, 15, 17)) {
+    if (-not $pasos -or -not (Test-Path $ruta)) { return }
+    try { $filas = @(Import-Csv $ruta -Delimiter ';' | Where-Object { $_.PSObject.Properties['Pasos'] -and $_.Pasos }) }
+    catch { return }
+    $anteriores = @($filas | Select-Object -Last 10 | ForEach-Object { ConvertFrom-TextoPasos $_.Pasos })
+    # Sin "return ,": quien la llama la envuelve en @(...) (con la coma, una lista vacia contaria como 1)
+    foreach ($n in $pasosFijos) {
+        $actual = $pasos["$n"]
+        if ($null -eq $actual) { continue }
+        $antes = @($anteriores | Where-Object { $_.ContainsKey("$n") } | ForEach-Object { $_["$n"] })
+        if ($antes.Count -lt 3) { continue }
+        $normal = Get-Mediana $antes
+        if ($actual -ge 3 * $normal -and $actual - $normal -ge 120) {
+            [pscustomobject]@{ Paso = $n; Segundos = $actual; Normal = $normal }
+        }
+    }
 }
 
 # A que ritmo se esta llenando C:, con una recta de minimos cuadrados sobre el espacio libre despues de

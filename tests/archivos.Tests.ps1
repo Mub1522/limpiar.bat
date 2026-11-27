@@ -106,6 +106,76 @@ Describe 'Format-Tamano' {
     }
 }
 
+Describe 'Get-ExtensionesObsoletas (paso 4)' {
+    It 'devuelve solo las carpetas marcadas en .obsolete que existen' {
+        $ext = "$TestDrive\extensiones"
+        New-ArchivoPrueba "$ext\pub.ext-1.0.0\package.json" 10
+        New-ArchivoPrueba "$ext\pub.ext-1.1.0\package.json" 10
+        Set-Content "$ext\.obsolete" '{"pub.ext-1.0.0":true,"pub.borrada-0.1.0":true}'
+        $r = @(Get-ExtensionesObsoletas $ext)
+        $r.Count | Should Be 1
+        $r[0] | Should Be "$ext\pub.ext-1.0.0"
+    }
+    It 'sin .obsolete no devuelve nada' {
+        @(Get-ExtensionesObsoletas "$TestDrive\no-existe").Count | Should Be 0
+    }
+}
+
+Describe 'Get-NavegadoresPlaywrightSinUso (paso 6)' {
+    # Cache de Playwright de prueba: navegadores, y un .links por instalacion apuntando a su playwright-core
+    function New-InstalacionPlaywright($cache, $nombre, $json) {
+        $core = "$TestDrive\proyectos\$nombre\playwright-core"
+        New-Item -ItemType Directory -Force $core, "$cache\.links" | Out-Null
+        if ($json) { Set-Content "$core\browsers.json" $json }
+        Set-Content "$cache\.links\$nombre" $core
+        return $core
+    }
+    $json1248 = '{"browsers":[{"name":"chromium","revision":"1248"},{"name":"ffmpeg","revision":"1013"}]}'
+
+    It 'ofrece solo lo que no usa ninguna instalacion existente' {
+        $cache = "$TestDrive\pw1"
+        foreach ($n in 'chromium-1200', 'chromium-1248', 'ffmpeg-1013', 'firefox-1500') { New-ArchivoPrueba "$cache\$n\a.bin" 1000 }
+        New-InstalacionPlaywright $cache 'actual' $json1248 | Out-Null
+        $borrado = New-InstalacionPlaywright $cache 'borrado' '{"browsers":[{"name":"firefox","revision":"1500"}]}'
+        Remove-Item $borrado -Recurse -Force
+        $r = @(Get-NavegadoresPlaywrightSinUso $cache)
+        ($r.Nombre | Sort-Object) -join ',' | Should Be 'chromium-1200,firefox-1500'
+        $r[0].Bytes | Should Be 1000
+    }
+
+    It 'si no puede leer lo que usa una instalacion existente, no ofrece nada' {
+        $cache = "$TestDrive\pw2"
+        New-ArchivoPrueba "$cache\chromium-1200\a.bin" 1000
+        New-InstalacionPlaywright $cache 'sinjson' $null | Out-Null
+        @(Get-NavegadoresPlaywrightSinUso $cache).Count | Should Be 0
+    }
+}
+
+Describe 'Find-NodeModulesViejos (paso 6)' {
+    $raiz = "$TestDrive\usuario"
+    New-ArchivoPrueba "$raiz\proyectos\viejo\package.json" 10 -horasAtras (24 * 200)
+    New-ArchivoPrueba "$raiz\proyectos\viejo\src\index.js" 10 -horasAtras (24 * 200)
+    New-ArchivoPrueba "$raiz\proyectos\viejo\node_modules\lib\a.js" 3000 -horasAtras 1
+    New-ArchivoPrueba "$raiz\proyectos\viejo\node_modules\lib\node_modules\b.js" 1000 -horasAtras 1
+    New-ArchivoPrueba "$raiz\proyectos\nuevo\package.json" 10 -horasAtras (24 * 200)
+    New-ArchivoPrueba "$raiz\proyectos\nuevo\src\index.js" 10 -horasAtras 24
+    New-ArchivoPrueba "$raiz\proyectos\nuevo\node_modules\lib\a.js" 5000 -horasAtras 1
+    New-ArchivoPrueba "$raiz\AppData\app\node_modules\x.js" 9000 -horasAtras (24 * 200)
+    New-ArchivoPrueba "$raiz\.oculta\p\node_modules\x.js" 9000 -horasAtras (24 * 200)
+    $r = Find-NodeModulesViejos $raiz 90
+
+    It 'encuentra el proyecto sin cambios (aunque node_modules sea reciente) y no el que se edito' {
+        $r.Proyectos.Count | Should Be 1
+        $r.Proyectos[0].Proyecto | Should Be "$raiz\proyectos\viejo"
+        $r.Proyectos[0].Bytes | Should Be 4000
+        $r.Incompleto | Should Be $false
+    }
+
+    It 'con tiempo maximo 0 devuelve lo que tenga y dice que quedo incompleta' {
+        (Find-NodeModulesViejos $raiz 90 5 0).Incompleto | Should Be $true
+    }
+}
+
 Describe 'Invoke-LimpiezaComando (paso 6)' {
     # En lugar de un programa real (composer, go...), una funcion que borra un archivo de la carpeta de prueba
     function Remove-CachePrueba { Remove-Item "$TestDrive\cachecmd\a.bin" }

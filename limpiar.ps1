@@ -27,6 +27,22 @@ function Log($msg, $color = 'Gray') {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -ForegroundColor $color
 }
 
+# Cuanto tarda cada paso (segundos, por numero de paso) para el historial y el resumen. Start-Paso cierra
+# el paso anterior y anuncia el nuevo; Stop-Paso cierra el ultimo.
+$duracionPasos = [ordered]@{}
+$script:pasoActual = $null
+function Start-Paso($numero, $mensaje) {
+    Stop-Paso
+    $script:pasoActual = $numero
+    $script:inicioPaso = Get-Date
+    Log $mensaje Yellow
+}
+function Stop-Paso {
+    if ($null -eq $script:pasoActual) { return }
+    $script:duracionPasos["$($script:pasoActual)"] = [int][math]::Round(((Get-Date) - $script:inicioPaso).TotalSeconds)
+    $script:pasoActual = $null
+}
+
 # Edicion rapida (QuickEdit) de la consola: un clic en la ventana la pone en "Seleccionar" y el
 # siguiente Write-Host se queda esperando hasta Enter o Esc, asi que la limpieza se detiene sin avisar
 # (el 26/11/2026 quedo 10 minutos parada en el paso 17). Se apaga mientras corre y se devuelve al final.
@@ -78,11 +94,6 @@ function Receive-TrabajoConLimite($trabajo, $segundos) {
     return [pscustomobject]@{ Ok = $true; Resultado = $resultado; Error = $null }
 }
 
-# Tamano legible: en GB desde 1000 MB, porque "1.010 MB" se confunde con 1 MB por el separador de miles
-function Format-Tamano($bytes) {
-    if ($bytes -ge 1000MB) { return '{0:N2} GB' -f ($bytes / 1GB) }
-    return '{0:N0} MB' -f ($bytes / 1MB)
-}
 
 function Get-FolderSize($path) {
     (Get-ChildItem $path -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
@@ -482,6 +493,104 @@ function Start-ConsultaWinget {
     }
 }
 
+# --- Versiones viejas de extensiones de VS Code (paso 4) ---
+# Nombres de las carpetas marcadas en .obsolete ({"publisher.nombre-1.2.3":true,...}). Se lee con una
+# expresion regular y no con ConvertFrom-Json (un JSON danado cortaria el paso). Solo nombres simples: nada
+# con \ / o .. puede salir de la carpeta de extensiones.
+function ConvertFrom-ObsoletoVsCode($texto) {
+    @([regex]::Matches("$texto", '"([^"\\/:]+)"\s*:\s*true') | ForEach-Object { $_.Groups[1].Value } |
+        Where-Object { $_ -notmatch '\.\.' -and $_ -notmatch '^\.' })
+}
+
+# Carpetas de extensiones viejas que todavia existen
+function Get-ExtensionesObsoletas($carpeta) {
+    $archivo = Join-Path $carpeta '.obsolete'
+    if (-not (Test-Path -LiteralPath $archivo)) { return }
+    ConvertFrom-ObsoletoVsCode (Get-Content -LiteralPath $archivo -Raw -ErrorAction SilentlyContinue) |
+        ForEach-Object { Join-Path $carpeta $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+}
+
+# --- Navegadores de Playwright que ya no usa ningun proyecto (paso 6) ---
+# Es lo mismo que hace Playwright al instalar otra version. Cada instalacion de Playwright deja en
+# <cache>\.links un archivo con la ruta de su playwright-core, y su browsers.json dice que versiones usa.
+# Las carpetas se llaman <nombre con _>-<revision>: chromium-1248, chromium_headless_shell-1248, ffmpeg-1013.
+
+# Carpetas que usa una instalacion, a partir del texto de su browsers.json. $null si no se reconoce
+# (entonces no se borra nada: no se sabria que necesita ese proyecto).
+function ConvertFrom-BrowsersJson($texto) {
+    $datos = $null
+    try { $datos = "$texto" | ConvertFrom-Json } catch { return $null }
+    if (-not $datos.browsers) { return $null }
+    @($datos.browsers | ForEach-Object {
+        $revision = if ($_.revisionOverrides -and $_.revisionOverrides.win64) { $_.revisionOverrides.win64 } else { $_.revision }
+        "$($_.name -replace '-', '_')-$revision"
+    })
+}
+
+# Carpetas de navegadores que ninguna instalacion existente usa. Las instalaciones cuya carpeta ya no
+# existe (proyecto borrado) no cuentan, igual que en Playwright.
+function Get-NavegadoresPlaywrightSinUso($carpeta) {
+    if (-not (Test-Path -LiteralPath $carpeta)) { return }
+    $enUso = @{}
+    foreach ($link in Get-ChildItem -LiteralPath (Join-Path $carpeta '.links') -File -Force -ErrorAction SilentlyContinue) {
+        $destino = "$(Get-Content -LiteralPath $link.FullName -Raw -ErrorAction SilentlyContinue)".Trim()
+        if (-not $destino -or -not (Test-Path -LiteralPath $destino)) { continue }
+        $usadas = ConvertFrom-BrowsersJson (Get-Content -LiteralPath (Join-Path $destino 'browsers.json') -Raw -ErrorAction SilentlyContinue)
+        if ($null -eq $usadas) { Log "  Playwright: no se pudo leer que usa $destino; no se borra nada" DarkYellow; return }
+        foreach ($u in $usadas) { $enUso[$u] = $true }
+    }
+    Get-ChildItem -LiteralPath $carpeta -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^[a-z_]+-\d+$' -and -not $enUso.ContainsKey($_.Name) } | ForEach-Object {
+            [pscustomobject]@{ Nombre = $_.Name; Ruta = $_.FullName; Bytes = [double](Get-FolderSize $_.FullName) }
+        }
+}
+
+# --- node_modules de proyectos sin tocar (paso 6, solo informa) ---
+# Si algo dentro de la carpeta del proyecto (sin contar node_modules ni .git) cambio despues de $limite.
+# Baja hasta $profundidad niveles: alcanza para src\, y no recorre proyectos enormes.
+function Test-ProyectoReciente($carpeta, $limite, $profundidad = 3) {
+    foreach ($item in Get-ChildItem -LiteralPath $carpeta -Force -ErrorAction SilentlyContinue) {
+        if ($item.PSIsContainer) {
+            if ($item.Name -in 'node_modules', '.git' -or $profundidad -le 0) { continue }
+            if (Test-ProyectoReciente $item.FullName $limite ($profundidad - 1)) { return $true }
+        } elseif ($item.LastWriteTime -gt $limite) { return $true }
+    }
+    return $false
+}
+
+# Busca carpetas node_modules dentro de $raiz (hasta $profundidad niveles) cuyo proyecto no cambio en $dias
+# dias. No entra en node_modules, .git, AppData ni carpetas ocultas o enlazadas. Con $segundosMax como tope
+# (buscar y medir): si se pasa, devuelve lo encontrado hasta ahi con Incompleto.
+function Find-NodeModulesViejos($raiz, $dias = 90, $profundidad = 5, $segundosMax = 90) {
+    $reloj = [Diagnostics.Stopwatch]::StartNew()
+    $limite = (Get-Date).AddDays(-$dias)
+    $encontrados = New-Object Collections.Generic.List[object]
+    $pendientes = New-Object Collections.Generic.Queue[object]
+    $pendientes.Enqueue(@($raiz, 0))
+    $incompleto = $false
+    while ($pendientes.Count -gt 0) {
+        if ($reloj.Elapsed.TotalSeconds -gt $segundosMax) { $incompleto = $true; break }
+        $carpeta, $nivel = $pendientes.Dequeue()
+        foreach ($sub in Get-ChildItem -LiteralPath $carpeta -Directory -Force -ErrorAction SilentlyContinue) {
+            if ($sub.Name -eq 'node_modules') {
+                if (-not (Test-ProyectoReciente $carpeta $limite)) { $encontrados.Add([pscustomobject]@{ Proyecto = $carpeta; Ruta = $sub.FullName; Bytes = $null }) }
+                continue
+            }
+            $oculta = [int]($sub.Attributes -band ([IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::ReparsePoint)) -ne 0
+            if ($oculta -or $sub.Name -like '.*' -or $sub.Name -in 'AppData', 'node_modules' -or $nivel + 1 -gt $profundidad) { continue }
+            $pendientes.Enqueue(@($sub.FullName, ($nivel + 1)))
+        }
+    }
+    foreach ($e in $encontrados) {
+        if ($reloj.Elapsed.TotalSeconds -gt $segundosMax) { $incompleto = $true; break }
+        $e.Bytes = [double](Get-FolderSize $e.Ruta)
+    }
+    [pscustomobject]@{
+        Proyectos  = @($encontrados | Where-Object { $null -ne $_.Bytes } | Sort-Object Bytes -Descending)
+        Incompleto = $incompleto
+    }
+}
+
 # --- Papelera de reciclaje (paso 1) ---
 # Cada elemento son dos archivos en <unidad>:\$Recycle.Bin\<SID del usuario>: $R... es lo borrado y
 # $I... su ficha (tamano, fecha en que se borro y ruta original). Se lee la fecha de la ficha porque la del
@@ -604,6 +713,7 @@ $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modifi
 $diasVolcados = 7      # paso 7: si hubo un pantallazo azul en estos dias, se conservan los volcados de memoria
 $diasRestosActualizacion = 10  # paso 9: restos de una actualizacion grande solo se ofrecen borrar pasado este tiempo
 $diasPapelera = 30     # paso 1: de la papelera solo se ofrece borrar lo que lleva ahi mas de este tiempo
+$diasNodeModules = 90  # paso 6: se informan los node_modules de proyectos sin cambios en este tiempo (no se borran)
 
 $navegadores = @(
     @{ Nombre = 'Chrome';  Proceso = 'chrome';  Datos = "$env:LOCALAPPDATA\Google\Chrome\User Data" },
@@ -652,6 +762,10 @@ $restosActualizacion = @(Get-RestosActualizacion)
 # Papelera: lo que lleva ahi mas de $diasPapelera dias (lo mismo que borra el Sensor de almacenamiento de Windows)
 $papeleraVieja = @(Get-PapeleraVieja @(Get-CarpetasPapelera) $diasPapelera)
 $bytesPapelera = [double]($papeleraVieja | Measure-Object Bytes -Sum).Sum
+# Navegadores de Playwright que ya no usa ningun proyecto (respeta PLAYWRIGHT_BROWSERS_PATH si se cambio)
+$carpetaPlaywright = if ($env:PLAYWRIGHT_BROWSERS_PATH -and $env:PLAYWRIGHT_BROWSERS_PATH -ne '0') { $env:PLAYWRIGHT_BROWSERS_PATH } else { "$env:LOCALAPPDATA\ms-playwright" }
+$navegadoresPlaywright = @(Get-NavegadoresPlaywrightSinUso $carpetaPlaywright)
+$bytesPlaywright = [double]($navegadoresPlaywright | Measure-Object Bytes -Sum).Sum
 
 # Solo se pregunta lo que aplica en este equipo y en este momento
 $preguntas = New-Object System.Collections.ArrayList
@@ -681,6 +795,13 @@ if ($bytesNuget -gt 50MB) {
     # Con poco tamano no vale la pena preguntar
     [void]$preguntas.Add(@{ Clave = 'nuget'; Titulo = 'Borrar la cache de paquetes NuGet (.NET)'
         Detalle = @("Ocupa $(Format-Tamano $bytesNuget). La proxima compilacion de un proyecto .NET tendra que volver a descargar sus paquetes.") })
+}
+if ($bytesPlaywright -gt 50MB) {
+    # Se vuelven a descargar con "npx playwright install" si un proyecto los necesita: se pregunta igual
+    $detalle = @('Navegadores de prueba que ya no usa ningun proyecto con Playwright:')
+    $detalle += $navegadoresPlaywright | ForEach-Object { "  - $($_.Nombre) ($(Format-Tamano $_.Bytes))" }
+    $detalle += 'Si un proyecto los vuelve a necesitar, se descargan con: npx playwright install'
+    [void]$preguntas.Add(@{ Clave = 'playwright'; Titulo = 'Borrar navegadores de Playwright sin usar'; Detalle = $detalle })
 }
 if ($bytesLogsPm2 -gt 50MB) {
     [void]$preguntas.Add(@{ Clave = 'pm2'; Titulo = 'Vaciar los logs de PM2 (Node.js)'
@@ -776,6 +897,7 @@ $hacerActualizar      = [bool]$respuestas['actualizar']
 $borrarNuget          = [bool]$respuestas['nuget']
 $borrarLogsPm2        = [bool]$respuestas['pm2']
 $borrarPapelera       = [bool]$respuestas['papelera']
+$borrarPlaywright     = [bool]$respuestas['playwright']
 
 Write-SeccionConsola 'LIMPIEZA EN CURSO'
 Log "Todo listo: puedes dejar la ventana y volver cuando aparezca el resumen." Cyan
@@ -795,7 +917,7 @@ if ($marcasViejas) {
 $trabajoWinget = Start-ConsultaWinget
 
 # --- Paso 1: archivos temporales del usuario y lo viejo de la papelera ---
-Log "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h, y papelera de reciclaje" Yellow
+Start-Paso 1 "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h, y papelera de reciclaje"
 $total += Clear-Folder $env:TEMP -HorasMinimas $horasTemporales
 if ($borrarPapelera) {
     Log "  papelera: lo borrado hace mas de $diasPapelera dias..."
@@ -809,13 +931,13 @@ if ($borrarPapelera) {
 
 # --- Paso 2: temporales de Windows ---
 $winTemp = Join-Path $env:SystemRoot 'Temp'
-Log "Paso 2: temporales de Windows ($winTemp), los de mas de $horasTemporales h" Yellow
+Start-Paso 2 "Paso 2: temporales de Windows ($winTemp), los de mas de $horasTemporales h"
 $total += Clear-Folder $winTemp -HorasMinimas $horasTemporales
 
 # --- Paso 3: cache de descargas de Windows Update ---
 # Hay que detener los servicios para que suelten los archivos
 $wuCache = Join-Path $env:SystemRoot 'SoftwareDistribution\Download'
-Log "Paso 3: cache de Windows Update ($wuCache)" Yellow
+Start-Paso 3 "Paso 3: cache de Windows Update ($wuCache)"
 $servicios = 'wuauserv', 'bits'
 foreach ($s in $servicios) {
     Log "  deteniendo servicio $s..."
@@ -837,7 +959,7 @@ foreach ($s in $servicios) {
 
 # --- Paso 4: cache de navegadores y VS Code ---
 # Solo cache (no toca historial, cookies, contrasenas ni sesiones)
-Log "Paso 4: cache de navegadores, VS Code y apps de chat" Yellow
+Start-Paso 4 "Paso 4: cache de navegadores, VS Code y apps de chat"
 foreach ($nav in $navegadores) {
     # Con el navegador abierto la cache esta bloqueada: solo se cierra si se autorizo al inicio
     if (Get-Process $nav.Proceso -ErrorAction SilentlyContinue) {
@@ -880,6 +1002,23 @@ if (Test-Path $carpetaVSCode) {
         }
     }
 }
+# Versiones viejas de extensiones de VS Code: al actualizar una extension, VS Code anota la carpeta vieja en
+# .obsolete y la borra al volver a abrirse; si no se cierra en dias, quedan ahi. Solo esas y con VS Code cerrado.
+$carpetaExtensiones = if ($env:VSCODE_EXTENSIONS) { $env:VSCODE_EXTENSIONS } else { "$HOME\.vscode\extensions" }
+$extensionesViejas = @(Get-ExtensionesObsoletas $carpetaExtensiones)
+if ($extensionesViejas -and -not (Get-Process 'Code' -ErrorAction SilentlyContinue)) {
+    $antes = [double](($extensionesViejas | ForEach-Object { Get-FolderSize $_ } | Measure-Object -Sum).Sum)
+    foreach ($e in $extensionesViejas) {
+        Remove-Item -LiteralPath $e -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable err
+        if ($err) { Log "  en uso, omitido: $(Split-Path $e -Leaf)" DarkYellow } else { Log "  borrado: $(Split-Path $e -Leaf) (version vieja de una extension de VS Code)" DarkGray }
+    }
+    $despues = [double](($extensionesViejas | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-FolderSize $_ } | Measure-Object -Sum).Sum)
+    $liberado = [math]::Round([math]::Max([double]0, $antes - $despues) / 1MB, 2)
+    Log "  extensiones viejas de VS Code: $liberado MB liberados" Green
+    $total += $liberado
+} elseif ($extensionesViejas) {
+    Log "  extensiones viejas de VS Code conservadas: VS Code esta abierto (las borra el mismo al reiniciarse)" DarkGray
+}
 
 # Apps de chat (Teams, Discord, Slack): solo su cache de tipo Chrome. Si estan abiertas se saltan,
 # salvo que se haya autorizado cerrarlas (solo se pregunta cuando la cache pasa de 50 MB)
@@ -908,7 +1047,7 @@ function Clear-Folders($carpetas) {
 }
 
 # --- Paso 5: cache de shaders de la GPU (se regenera sola) ---
-Log "Paso 5: cache de shaders de la GPU" Yellow
+Start-Paso 5 "Paso 5: cache de shaders de la GPU"
 $total += Clear-Folders @(
     "$env:LOCALAPPDATA\NVIDIA\DXCache",
     "$env:LOCALAPPDATA\NVIDIA\GLCache",
@@ -917,7 +1056,7 @@ $total += Clear-Folders @(
 )
 
 # --- Paso 6: cache de paquetes de desarrollo (pip, npm y, si se autorizo, NuGet y logs de PM2) ---
-Log "Paso 6: cache de paquetes de desarrollo (pip, npm, Yarn, pnpm, Go, Composer, uv, Bun, conda, NuGet) y logs de PM2" Yellow
+Start-Paso 6 "Paso 6: cache de paquetes de desarrollo (pip, npm, Yarn, pnpm, Go, Composer, uv, Bun, conda, Playwright, NuGet) y logs de PM2"
 # Yarn 1: los proyectos tienen su propia copia en node_modules. La cache de Yarn 2+ (Berry) no se toca:
 # con Plug'n'Play los proyectos leen los paquetes directamente de ahi y dejarian de funcionar hasta reinstalar.
 $total += Clear-Folders @(
@@ -970,6 +1109,26 @@ foreach ($h in $cachesConComando) {
     }
     $total += Invoke-LimpiezaComando $h.Texto $carpeta $exe.Source $h.Limpiar -PorEspacioLibre:$h.PorEspacioLibre
 }
+if ($borrarPlaywright) {
+    $liberado = 0
+    foreach ($n in $navegadoresPlaywright) {
+        Remove-Item -LiteralPath $n.Ruta -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable err
+        if ($err) { Log "  en uso, omitido: $($n.Nombre)" DarkYellow }
+        else { Log "  borrado: $($n.Nombre) (navegador de Playwright sin usar)" DarkGray; $liberado += $n.Bytes }
+    }
+    $liberado = [math]::Round($liberado / 1MB, 2)
+    Log "  Playwright: $liberado MB liberados" Green
+    $total += $liberado
+} elseif ($navegadoresPlaywright) {
+    Log "  navegadores de Playwright sin usar conservados ($(Format-Tamano $bytesPlaywright))" DarkGray
+}
+# node_modules de proyectos sin cambios hace tiempo: solo se informan (el usuario decide; se recuperan con
+# npm install). Recorre la carpeta del usuario con un tiempo maximo.
+Log "  buscando node_modules de proyectos sin cambios en $diasNodeModules dias (solo informa, no borra nada)..."
+$nodeModulesViejos = Find-NodeModulesViejos $HOME $diasNodeModules
+foreach ($n in $nodeModulesViejos.Proyectos) { Log "    $($n.Ruta) ($(Format-Tamano $n.Bytes))" DarkGray }
+$textoBusqueda = if ($nodeModulesViejos.Incompleto) { ' (busqueda cortada por tiempo)' } else { '' }
+Log "  $($nodeModulesViejos.Proyectos.Count) node_modules sin usar, $(Format-Tamano ([double]($nodeModulesViejos.Proyectos | Measure-Object Bytes -Sum).Sum))$textoBusqueda" DarkGray
 if ($borrarNuget) {
     $total += Clear-Folders $carpetasNuget
 } elseif ($carpetasNuget) {
@@ -1003,7 +1162,7 @@ if ($borrarLogsPm2) {
 }
 
 # --- Paso 7: logs, volcados de memoria e informes de error de Windows ---
-Log "Paso 7: logs de Windows (CBS y DISM), volcados de memoria e informes de error" Yellow
+Start-Paso 7 "Paso 7: logs de Windows (CBS y DISM), volcados de memoria e informes de error"
 $total += Clear-Folders @(
     "$env:SystemRoot\Logs\CBS",
     "$env:SystemRoot\Logs\DISM"
@@ -1039,7 +1198,7 @@ $total += Clear-Folders @(
 )
 
 # --- Paso 8: cache de Delivery Optimization (comando oficial de Windows) ---
-Log "Paso 8: cache de Delivery Optimization" Yellow
+Start-Paso 8 "Paso 8: cache de Delivery Optimization"
 # Se mide por el espacio libre del disco, no por el tamano de los archivos:
 # esta cache usa archivos "reservados" que aparentan pesar el tamano completo
 # de la actualizacion aunque en disco ocupen mucho menos
@@ -1058,7 +1217,7 @@ try {
 }
 
 # --- Paso 9 (opcional): limpieza de componentes de Windows con DISM ---
-Log "Paso 9 (opcional): limpieza profunda de Windows (restos de actualizaciones grandes y DISM)" Yellow
+Start-Paso 9 "Paso 9 (opcional): limpieza profunda de Windows (restos de actualizaciones grandes y DISM)"
 # Liberador de espacio de Windows: restos de la actualizacion grande, si se autorizo.
 # Sin "Device Driver Packages": en tres ejecuciones (24 y 25/11/2026) libero 0 MB y tardo mas de
 # 1 hora (trabado), 9 minutos y 20 (cortado por el tiempo maximo)
@@ -1105,7 +1264,7 @@ if ($hacerDism) {
 }
 
 # --- Paso 10 (opcional): revisar y reparar archivos de Windows ---
-Log "Paso 10 (opcional): reparacion del sistema" Yellow
+Start-Paso 10 "Paso 10 (opcional): reparacion del sistema"
 if ($hacerReparacion) {
     # Punto de restauracion por si algo sale mal
     Log "  creando punto de restauracion..."
@@ -1146,7 +1305,7 @@ $trabajoWu = Start-ConsultaWindowsUpdate
 # --- Paso 11: limpieza de Docker ---
 # Va antes de compactar: lo que borra Docker queda libre dentro de su disco virtual,
 # y solo vuelve a Windows cuando ese disco se compacta (paso 13)
-Log "Paso 11: limpieza de Docker" Yellow
+Start-Paso 11 "Paso 11: limpieza de Docker"
 if (-not $dockerInstalado) {
     Log "  Docker no esta instalado: se omite" DarkGray
 } elseif (-not $dockerActivo) {
@@ -1203,7 +1362,7 @@ if (-not $dockerInstalado) {
 # --- Paso 12 (opcional): actualizar los paquetes de Linux en WSL ---
 # Va antes de compactar: WSL tiene que estar encendido, y lo que libera apt-get clean
 # vuelve a Windows al compactar (paso 13)
-Log "Paso 12 (opcional): paquetes de Linux en WSL (apt)" Yellow
+Start-Paso 12 "Paso 12 (opcional): paquetes de Linux en WSL (apt)"
 if (-not $distrosApt) {
     Log "  no hay distribuciones WSL con apt: se omite" DarkGray
 } elseif ($actualizarWsl) {
@@ -1213,7 +1372,7 @@ if (-not $distrosApt) {
 }
 
 # --- Paso 13 (opcional): compactar los discos virtuales de Docker y WSL ---
-Log "Paso 13 (opcional): compactar discos virtuales de Docker/WSL" Yellow
+Start-Paso 13 "Paso 13 (opcional): compactar discos virtuales de Docker/WSL"
 if ($hacerCompactar) {
     $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
     $dockerAbierto = [bool](Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)
@@ -1291,7 +1450,7 @@ if ($hacerCompactar) {
 }
 
 # --- Paso 14: TRIM del SSD (despues de compactar, para que el SSD sepa lo que se libero) ---
-Log "Paso 14: optimizacion (TRIM) del SSD" Yellow
+Start-Paso 14 "Paso 14: optimizacion (TRIM) del SSD"
 $discoC = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
 if ($discoC.MediaType -eq 'SSD') {
     # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
@@ -1317,7 +1476,7 @@ if ($discoC.MediaType -eq 'SSD') {
 }
 
 # --- Paso 15: conservar solo los puntos de restauracion mas recientes ---
-Log "Paso 15: puntos de restauracion (se conservan los $maxPuntos mas recientes)" Yellow
+Start-Paso 15 "Paso 15: puntos de restauracion (se conservan los $maxPuntos mas recientes)"
 $puntos = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber)
 Log "  hay $($puntos.Count) punto(s) de restauracion"
 if ($puntos.Count -gt $maxPuntos) {
@@ -1337,7 +1496,7 @@ foreach ($p in Get-ComputerRestorePoint -ErrorAction SilentlyContinue) {
 }
 
 # --- Paso 16: aplicaciones desactualizadas (winget) ---
-Log "Paso 16: aplicaciones desactualizadas (winget)" Yellow
+Start-Paso 16 "Paso 16: aplicaciones desactualizadas (winget)"
 $appsActualizadas = @()
 $appsFallidas = @()
 $appsOmitidas = @()
@@ -1426,7 +1585,7 @@ if ($seActualizo) {
 # --- Paso 17: revision de salud del equipo (solo lectura: no cambia nada) ---
 # Windows Update, sistema de archivos, errores de hardware, seguridad y respaldo. El resultado va al
 # resumen; el detalle (titulos de actualizaciones, etc.) queda aqui en el log.
-Log "Paso 17: revision de salud del equipo (solo lectura)" Yellow
+Start-Paso 17 "Paso 17: revision de salud del equipo (solo lectura)"
 $discoSistema = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
 # Windows Update ya se consulto en segundo plano (se empezo despues del paso 10); si fallo, se repite aqui
 $consultaWu = Receive-TrabajoConLimite $trabajoWu 300
@@ -1437,6 +1596,15 @@ if (-not $wuPrevia -or $wuPrevia.Error) {
     $wuPrevia = $null
 }
 $salud = Get-SaludEquipo $discoSistema $true $wuPrevia
+Stop-Paso
+
+# Cuanto tardo cada paso, y si alguno de los que hacen siempre lo mismo tardo mucho mas que de costumbre
+$segundosLimpieza = (@($duracionPasos.Values) | Measure-Object -Sum).Sum
+Log ("Duracion: {0:N0} min. Por paso (s): {1}" -f ($segundosLimpieza / 60), (ConvertTo-TextoPasos $duracionPasos)) DarkGray
+$pasosLentos = @(Get-PasosLentos $archivoHistorial $duracionPasos)
+foreach ($p in $pasosLentos) {
+    Log ("  el paso {0} tardo {1:N0} min; lo normal es {2:N0} min" -f $p.Paso, ($p.Segundos / 60), ($p.Normal / 60)) DarkYellow
+}
 
 Log "=== Limpieza completada ===" Cyan
 
@@ -1479,11 +1647,14 @@ Show-Resumen @{
     DistrosApt       = $distrosApt
     ActualizarWsl    = $actualizarWsl
     ActualizacionesWsl = $actualizacionesWsl
+    SegundosLimpieza = $segundosLimpieza
+    PasosLentos      = $pasosLentos
+    NodeModulesViejos = $nodeModulesViejos
 }
 
 # --- Historial (lib\historial.ps1): se guarda despues del resumen para incluir los avisos ---
 try {
-    $cantidad = Add-Ejecucion $archivoHistorial $total $unidadC.Free $avisosResumen
+    $cantidad = Add-Ejecucion $archivoHistorial $total $unidadC.Free $avisosResumen $duracionPasos
     Log "Historial: ejecucion guardada ($cantidad registrada(s) en historial.csv)" DarkGray
 } catch {
     Log "Historial: no se pudo guardar: $($_.Exception.Message)" DarkYellow

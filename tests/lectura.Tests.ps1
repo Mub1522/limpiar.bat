@@ -279,6 +279,74 @@ Describe 'Select-RetrasosArranque (paso 17)' {
     }
 }
 
+Describe 'ConvertFrom-PlanEnergia (paso 17)' {
+    It 'lee el plan en espanol o ingles, incluido uno personalizado' {
+        $r = ConvertFrom-PlanEnergia 'GUID de plan de energia: 381b4222-f694-41f0-9685-ff5bb260df2e  (Equilibrado)'
+        $r.Nombre | Should Be 'Equilibrado'
+        $r.AhorroEnergia | Should Be $false
+        (ConvertFrom-PlanEnergia 'Power Scheme GUID: 0059706b-d9ad-4677-b01d-fc4e227b75c2  (My Custom Plan 1)').Nombre | Should Be 'My Custom Plan 1'
+    }
+    It 'reconoce Ahorro de energia por su GUID (no por el nombre, que cambia con el idioma)' {
+        (ConvertFrom-PlanEnergia 'Power Scheme GUID: a1841308-3541-4fab-bc81-f71556f20b4a  (Power saver)').AhorroEnergia | Should Be $true
+    }
+    It 'devuelve $null si no la reconoce' {
+        ConvertFrom-PlanEnergia 'error' | Should BeNullOrEmpty
+    }
+}
+
+Describe 'Select-AppsQueFallan (paso 17)' {
+    It 'solo las que fallaron 3 veces o mas, de la que mas a la que menos' {
+        $fallos = @('a.exe', 'a.exe', 'a.exe', 'b.exe', 'c.exe', 'c.exe', 'c.exe', 'c.exe') | ForEach-Object { [pscustomobject]@{ App = $_ } }
+        $r = Select-AppsQueFallan $fallos
+        $r.Count | Should Be 2
+        $r[0].App | Should Be 'c.exe'
+        $r[0].Veces | Should Be 4
+    }
+    It 'sin fallos devuelve una lista vacia, no $null' {
+        $r = Select-AppsQueFallan @()
+        ($null -eq $r) | Should Be $false
+        @($r).Count | Should Be 0
+    }
+}
+
+Describe 'Select-UltimaPruebaMemoria (paso 17)' {
+    It 'toma la ultima prueba y dice si encontro errores' {
+        $ev = @(
+            [pscustomobject]@{ Id = 1102; Fecha = (Get-Date).AddDays(-200) }
+            [pscustomobject]@{ Id = 1201; Fecha = (Get-Date).AddDays(-10) }
+            [pscustomobject]@{ Id = 2001; Fecha = (Get-Date).AddDays(-1) }
+        )
+        (Select-UltimaPruebaMemoria $ev).ConErrores | Should Be $false
+        (Select-UltimaPruebaMemoria @($ev[0])).ConErrores | Should Be $true
+    }
+    It 'si nunca se hizo, $null' {
+        Select-UltimaPruebaMemoria @() | Should BeNullOrEmpty
+    }
+}
+
+Describe 'ConvertFrom-ObsoletoVsCode (paso 4)' {
+    It 'lee las carpetas marcadas y descarta las que podrian salir de la carpeta de extensiones' {
+        $r = ConvertFrom-ObsoletoVsCode '{"pub.ext-1.0.0":true,"pub.otra-2.1.3-win32-x64":true,"..\\..\\Windows":true,"..":true,".oculta":true,"a/b":true,"pub.falsa-1.0":false}'
+        $r.Count | Should Be 2
+        $r[0] | Should Be 'pub.ext-1.0.0'
+        $r[1] | Should Be 'pub.otra-2.1.3-win32-x64'
+    }
+}
+
+Describe 'ConvertFrom-BrowsersJson (paso 6)' {
+    It 'devuelve las carpetas que usa una instalacion de Playwright' {
+        $r = ConvertFrom-BrowsersJson '{"browsers":[{"name":"chromium","revision":"1248"},{"name":"chromium-headless-shell","revision":"1248"},{"name":"webkit","revision":"2370","revisionOverrides":{"mac14":"2251","win64":"2100"}}]}'
+        $r -contains 'chromium-1248' | Should Be $true
+        $r -contains 'chromium_headless_shell-1248' | Should Be $true
+        $r -contains 'webkit-2100' | Should Be $true
+    }
+    It 'devuelve $null si no lo reconoce (y entonces no se borra nada)' {
+        ConvertFrom-BrowsersJson 'no es json' | Should BeNullOrEmpty
+        ConvertFrom-BrowsersJson '{"otra":1}' | Should BeNullOrEmpty
+        ConvertFrom-BrowsersJson $null | Should BeNullOrEmpty
+    }
+}
+
 Describe 'Select-DispositivosConProblema (paso 17)' {
     $lista = @(
         [pscustomobject]@{ Name = 'Teclado'; ConfigManagerErrorCode = 0; PNPClass = 'Keyboard'; PNPDeviceID = 'HID\A' }

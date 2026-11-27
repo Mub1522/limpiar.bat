@@ -15,7 +15,7 @@ Script para limpiar y mantener Windows. Se ejecuta con doble clic, muestra un lo
 | `lib\salud.ps1` | Los datos de salud del equipo para el resumen (Windows Update, disco, errores de hardware, seguridad, respaldo...). Solo lee, no cambia nada. |
 | `lib\correo.ps1` | El envio del resumen por correo con Resend. |
 | `lib\historial.ps1` | Guarda cada ejecucion en `historial.csv` y la lee para comparar con la anterior. |
-| `historial.csv` | Una linea por ejecucion: fecha, MB liberados, espacio libre al terminar y avisos (se conservan las ultimas 200). Se crea solo. |
+| `historial.csv` | Una linea por ejecucion: fecha, MB liberados, espacio libre al terminar, avisos, minutos que tardo y segundos de cada paso (se conservan las ultimas 200). Se crea solo. |
 | `correo.json` | Configuracion del correo, **incluida la API key de Resend**. No lo compartas. Es opcional: se crea copiando `correo.ejemplo.json`. |
 | `correo.ejemplo.json` | Plantilla de `correo.json` sin datos reales. |
 | `limpieza.log` | Log de la **ultima** ejecucion. Se reemplaza cada vez. Guarda todo lo util: tus respuestas, que hizo u omitio cada paso, errores y el resumen final. |
@@ -43,9 +43,9 @@ No se instala nada: es una carpeta que se copia y se ejecuta. No crea servicios 
 
 | Que | Donde | Tamano |
 |---|---|---|
-| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~310 KB (~370 KB con `tests\` y las herramientas de desarrollo) |
+| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~340 KB (~410 KB con `tests\` y las herramientas de desarrollo) |
 | `limpieza.log` | En la carpeta, se reemplaza en cada ejecucion | 30-300 KB |
-| `historial.csv` | En la carpeta, guarda las ultimas 200 ejecuciones | 10 KB como maximo |
+| `historial.csv` | En la carpeta, guarda las ultimas 200 ejecuciones | 30 KB como maximo |
 | Acceso directo `Limpieza Windows` (opcional) | Escritorio | 2 KB |
 | Puntos de restauracion | Los de Windows (Proteccion del sistema) | Se conservan solo los 2 mas recientes (paso 15) |
 
@@ -105,6 +105,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 - **Cerrar el navegador** (solo si hay uno abierto) para limpiar su cache. Se cierra recien al llegar al paso 4.
 - **Cerrar Teams, Discord o Slack** (solo si esta abierto y su cache pasa de 50 MB) para limpiar su cache. Se cierra al llegar al paso 4 y no se vuelve a abrir solo; si estas en una llamada, responde N.
 - **Borrar la cache de NuGet (.NET)** (solo si ocupa mas de 50 MB). Muestra cuanto ocupa; la proxima compilacion de un proyecto .NET volvera a descargar sus paquetes.
+- **Borrar navegadores de Playwright sin usar** (solo si ocupan mas de 50 MB). Son los navegadores de prueba que ya no usa ningun proyecto con Playwright: lo mismo que borra Playwright al instalar otra version. Muestra cada uno con su tamano; si un proyecto los vuelve a necesitar, se descargan con `npx playwright install`.
 - **Vaciar los logs de PM2 (Node.js)** (solo si ocupan mas de 50 MB). Muestra cuanto ocupan; se pierde el historial de salida y errores de las apps, que siguen corriendo.
 - **Limpieza profunda (DISM).** Tarda 5-15 min. Borra versiones viejas de componentes de Windows Update: despues no se pueden desinstalar las actualizaciones ya instaladas.
 - **Borrar los restos de la ultima actualizacion grande de Windows** (`Windows.old`, `$WINDOWS.~BT`, `$WINDOWS.~WS`; solo si existen, ocupan mas de 100 MB y ninguno se modifico en los ultimos 10 dias). Muestra cada carpeta con su tamano. Despues ya no se puede volver a la version anterior de Windows.
@@ -123,9 +124,9 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
    En las carpetas temporales hay archivos de programas que estan trabajando en ese momento (instaladores, Docker, etc.) y que no siempre estan bloqueados; borrarlos puede romper esos programas. Por eso se conserva lo reciente, igual que hace la Liberacion de espacio de Windows. Una carpeta se conserva si cualquier archivo dentro de ella es reciente.
 3. **Cache de Windows Update**: detiene sus servicios, borra y los vuelve a iniciar. El log dice si cada servicio quedo en marcha (si alguno no, Windows lo inicia solo cuando lo necesita)
-4. **Cache de navegadores** (Chrome, Edge, Brave, Firefox), **de VS Code y de apps de chat** (Teams, Teams clasico, Discord, Slack): solo cache (carpetas `Cache`, `Code Cache` y `GPUCache`). No toca historial, cookies, contrasenas, sesiones ni mensajes. VS Code no se cierra nunca (podria haber archivos sin guardar): si esta abierto, su cache se salta. Las apps de chat abiertas tambien se saltan, salvo que respondieras S a cerrarlas
+4. **Cache de navegadores** (Chrome, Edge, Brave, Firefox), **de VS Code y de apps de chat** (Teams, Teams clasico, Discord, Slack): solo cache (carpetas `Cache`, `Code Cache` y `GPUCache`). No toca historial, cookies, contrasenas, sesiones ni mensajes. VS Code no se cierra nunca (podria haber archivos sin guardar): si esta abierto, su cache se salta. Con VS Code cerrado tambien se borran las versiones viejas de extensiones que VS Code ya marco para borrar (`.obsolete`; VS Code las borra al volver a abrirse, y si queda abierto dias se acumulan). Las apps de chat abiertas tambien se saltan, salvo que respondieras S a cerrarlas
 5. **Cache de shaders de la GPU** (NVIDIA, DirectX, AMD)
-6. **Cache de paquetes de desarrollo y logs de PM2**: siempre pip, npm, Yarn 1, pnpm (`pnpm store prune`: solo los paquetes que ya no usa ningun proyecto) y la cache de compilacion de Go (`go clean -cache`). Si estan instalados en Windows, tambien Composer (`composer clear-cache`), uv (`uv cache prune`: solo lo que ya no se usa), Bun (`bun pm cache rm`) y conda (`conda clean --all`: indices, descargas y paquetes que no usa ningun entorno; los entornos no se tocan). uv, Bun y conda enlazan sus archivos en los proyectos, asi que lo liberado se mide por el espacio libre del disco. Gradle y Cargo no estan a proposito: ya borran solos lo que no se usa (Gradle a los 30 dias; Cargo, desde la version 1.88, a los 3 meses). La cache de Yarn 2+ no se toca (con Plug'n'Play los proyectos leen los paquetes de ahi), ni los modulos de Go. Ademas, NuGet (.NET) y los logs de PM2 (`%USERPROFILE%\.pm2\logs`, o `PM2_HOME` si esta definida) si respondiste S. Si PM2 esta en marcha sus logs se vacian con `pm2 flush` (borrarlos no liberaria nada mientras PM2 los tiene abiertos); si esta detenido se borran directamente
+6. **Cache de paquetes de desarrollo y logs de PM2**: siempre pip, npm, Yarn 1, pnpm (`pnpm store prune`: solo los paquetes que ya no usa ningun proyecto) y la cache de compilacion de Go (`go clean -cache`). Si estan instalados en Windows, tambien Composer (`composer clear-cache`), uv (`uv cache prune`: solo lo que ya no se usa), Bun (`bun pm cache rm`) y conda (`conda clean --all`: indices, descargas y paquetes que no usa ningun entorno; los entornos no se tocan). uv, Bun y conda enlazan sus archivos en los proyectos, asi que lo liberado se mide por el espacio libre del disco. Gradle y Cargo no estan a proposito: ya borran solos lo que no se usa (Gradle a los 30 dias; Cargo, desde la version 1.88, a los 3 meses). Si respondiste S, los navegadores de Playwright que ningun proyecto usa (Puppeteer no: no registra que version usa cada proyecto, y borrar la equivocada lo romperia). Al final **busca, sin borrar nada**, carpetas `node_modules` de proyectos sin cambios en 90 dias dentro de tu carpeta de usuario (hasta 5 niveles, sin entrar en `AppData` ni carpetas ocultas, como maximo 90 segundos): el resumen las muestra para que decidas. La cache de Yarn 2+ no se toca (con Plug'n'Play los proyectos leen los paquetes de ahi), ni los modulos de Go. Ademas, NuGet (.NET) y los logs de PM2 (`%USERPROFILE%\.pm2\logs`, o `PM2_HOME` si esta definida) si respondiste S. Si PM2 esta en marcha sus logs se vacian con `pm2 flush` (borrarlos no liberaria nada mientras PM2 los tiene abiertos); si esta detenido se borran directamente
 7. **Logs, volcados de memoria e informes de error de Windows**: logs CBS y DISM, informes de error ya enviados o en cola (`ProgramData\Microsoft\Windows\WER`) y los volcados de memoria de los pantallazos azules (`MEMORY.DMP`, `Minidump`, `LiveKernelReports`). Los volcados solo sirven para averiguar la causa de un pantallazo azul: si hubo uno en los ultimos 7 dias (o no se pudo leer el registro de eventos) se conservan
 8. **Cache de Delivery Optimization**
 9. **Limpieza profunda**, cada parte si respondiste S. Si el Liberador de espacio no termina en 20 minutos, se cierra y la limpieza sigue con lo demas; si una ejecucion se corta a mitad, la siguiente quita el perfil temporal que haya quedado:
@@ -154,13 +155,16 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
 ### Revision
 
-17. **Revision de salud del equipo** (solo lectura, no cambia nada): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada). Esa busqueda tarda 30-60 s y se hace en segundo plano desde que termina el paso 10, mientras corren los pasos 11 a 16; empieza despues del 10 porque el paso 3 detiene el servicio de Windows Update y los pasos 9 y 10 trabajan con los componentes de Windows. Si esa consulta fallo, se repite aqui. Ademas busca dispositivos con problemas (Administrador de dispositivos), lee del registro de rendimiento de Windows cuanto tardan los arranques y que los retraso, revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
+17. **Revision de salud del equipo** (solo lectura, no cambia nada): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada). Esa busqueda tarda 30-60 s y se hace en segundo plano desde que termina el paso 10, mientras corren los pasos 11 a 16; empieza despues del 10 porque el paso 3 detiene el servicio de Windows Update y los pasos 9 y 10 trabajan con los componentes de Windows. Si esa consulta fallo, se repite aqui. Ademas busca dispositivos con problemas (Administrador de dispositivos), lee del registro de rendimiento de Windows cuanto tardan los arranques y que los retraso, el plan de energia, las apps que se cerraron solas, el resultado de la ultima prueba de memoria y el tamano del archivo de hibernacion, revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
 
 ### Resumen final
 
 Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo. El encabezado indica el equipo, la version de Windows y la fecha. Esta separado en secciones; en las de salud cada linea lleva `[ OK ]`, `[ !! ]` (aviso), `[ i  ]` (solo informa; no cuenta como aviso) o `[ -- ]` (dato no disponible):
 
-- **Espacio**: total liberado (en GB desde 1000 MB), espacio libre en C: antes y despues, la limpieza anterior (hace cuanto fue y cuanto libero) y cuanto se lleno el disco desde entonces, la **tendencia** (cuantos GB por mes se pierden aunque se limpie, calculada con las limpiezas de los ultimos 120 dias, cuando hay al menos 4 y 14 dias de historial, y en cuantos meses C: bajaria del 15 % libre; si el espacio libre sube, dice "no se esta llenando"), lo liberado dentro de Docker (y que imagenes se borraron), la cache de `apt` borrada en WSL y tamano de los discos virtuales compactados.
+- **Espacio**: total liberado (en GB desde 1000 MB), espacio libre en C: antes y despues, la limpieza anterior (hace cuanto fue y cuanto libero) y cuanto se lleno el disco desde entonces, la **tendencia** (cuantos GB por mes se pierden aunque se limpie, calculada con las limpiezas de los ultimos 120 dias, cuando hay al menos 4 y 14 dias de historial, y en cuantos meses C: bajaria del 15 % libre; si el espacio libre sube, dice "no se esta llenando"), lo liberado dentro de Docker (y que imagenes se borraron), la cache de `apt` borrada en WSL y tamano de los discos virtuales compactados. Ademas:
+  - Duracion: cuanto tardo la limpieza (sin contar las preguntas). Aviso si un paso que hace siempre lo mismo (2, 3, 5, 7, 8, 14, 15 y 17) tardo el triple de lo normal y al menos 2 minutos mas, comparado con las ultimas 10 ejecuciones (hacen falta 3). Los pasos que dependen de una respuesta no se comparan: pueden tardar de minutos a una hora. El tiempo de cada paso queda en el log y en `historial.csv`
+  - `node_modules` sin usar (solo informa, desde 200 MB en total): cuanto ocupan, en cuantos proyectos y los 3 mas grandes. Se borran a mano y se recuperan con `npm install`
+  - Hibernacion (`hiberfil.sys`, solo si existe): su tamano. Si pasa del 30 % de la RAM, sugiere `powercfg /h /type reduced` (lo reduce a la mitad y mantiene el Inicio rapido; el script no lo cambia)
 - **Salud del equipo** (hardware):
   - Disco: estado, vida usada, temperatura y horas de uso del SSD. Aviso si la vida usada llega al 80 %, la temperatura a 80 C (un SSD NVMe trabaja normalmente a 60-75 C con carga, y se mide justo despues del TRIM) o si hay errores de lectura que el disco no pudo corregir (la senal mas clara de que esta fallando)
   - Sistema de archivos: resultado de la revision del paso 17. Si Windows ya corrigio los errores en linea, sale OK. Si queda un error menor (por ejemplo, una entrada de indice de una carpeta), sale como informacion. Si necesita una revision completa, sale como aviso. En los dos casos se repara a mano: el log deja los pasos y estan en "Reparar el disco" (Recomendaciones de uso)
@@ -169,6 +173,9 @@ Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo. E
   - Bateria (solo portatiles): capacidad actual frente a la original y ciclos (aviso por debajo del 80 %)
   - Hardware (30 dias): errores de memoria RAM, CPU o disco que registra Windows (WHEA). Aviso si hay alguno grave o 10 o mas corregidos (unos pocos corregidos son normales)
   - Dispositivos: los que el Administrador de dispositivos marca con un problema (hasta 3 con su nombre y que les pasa; la lista completa en el log). Aviso si alguno no inicia, fallo o tiene el driver danado. Si solo les falta el driver, solo se informa (suele ser un componente secundario que funciona sin el). No cuentan los que deshabilitaste ni los que estan desconectados
+  - Plan de energia: el que esta activo. Si es "Ahorro de energia", solo se informa (limita el procesador; en un portatil puede ser a proposito)
+  - Apps que fallan: las que se cerraron solas o se colgaron 3 veces o mas en 7 dias (hasta 3). Solo se informa: suele ser problema de la app, no del equipo
+  - Memoria RAM (solo si alguna vez se hizo la prueba de memoria de Windows, `mdsched`): aviso si la ultima encontro errores
   - Cuelgues (30 dias): pantallazos azules y apagados inesperados (cortes de luz, boton de encendido), segun el registro de eventos de Windows (eventos 1001 y 41); aviso si hubo alguno
 - **Windows y seguridad**:
   - Windows Update: cuantas actualizaciones faltan y hace cuanto se instalo la ultima. Aviso si alguna fallo y no se volvio a instalar, o si pasaron mas de 45 dias sin instalar nada (Windows instala cada mes). Las opcionales (drivers, vistas previas) se mencionan aparte
@@ -219,6 +226,7 @@ $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modifi
 $diasVolcados = 7      # paso 7: si hubo un pantallazo azul en estos dias, se conservan los volcados de memoria
 $diasRestosActualizacion = 10  # paso 9: restos de una actualizacion grande solo se ofrecen borrar pasado este tiempo
 $diasPapelera = 30     # paso 1: de la papelera solo se ofrece borrar lo que lleva ahi mas de este tiempo
+$diasNodeModules = 90  # paso 6: se informan los node_modules de proyectos sin cambios en este tiempo (no se borran)
 ```
 
 Y el correo, en `correo.json` (ver arriba).
@@ -251,6 +259,7 @@ Si el resumen muestra "Sistema de archivos" con un error pendiente, o "TRIM del 
 - **"Liberar RAM"**: Windows usa la RAM libre como cache a proposito; vaciarla hace que todo cargue mas lento despues.
 - **Borrar `C:\Windows\Installer`**, la cache de miniaturas o instantaneas que no son puntos de restauracion: o es peligroso o libera muy poco.
 - **Desactivar programas de inicio**: solo se informan en el resumen; tu decides cuales quitar.
+- **Borrar `node_modules` o cambiar la hibernacion**: solo se informan en el resumen. Un `node_modules` viejo puede ser de un proyecto que todavia usas sin editarlo, y la hibernacion la decides tu.
 - **Vaciar la papelera entera**: lo reciente puede ser algo que borraste por error y todavia quieres recuperar. Solo se ofrece borrar lo de mas de 30 dias, y solo de tu cuenta.
 
 ## Si modificas el script
@@ -277,13 +286,18 @@ Pester 3.4 viene con Windows. Si instalaste Pester 5, antes de `Invoke-Pester` c
 |---|---|
 | Sintaxis | Que `limpiar.ps1`, `lib\`, `tests\` y los demas `.ps1` se puedan leer (sin ejecutarlos). |
 | Solo ASCII | Que ningun `.ps1` tenga tildes ni simbolos: Windows PowerShell 5.1 los desfigura. |
-| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`, de las fichas de la papelera, de la lista de dispositivos y de los eventos de arranque (tiempo y retrasos); la medicion de las caches que se limpian con un comando; el borrado de carpetas y de la papelera (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; las consultas en segundo plano (que no esperen para siempre); el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
+| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`, de las fichas de la papelera, de la lista de dispositivos, de los eventos de arranque (tiempo y retrasos), del plan de energia, de las apps que fallan, de la prueba de memoria, de `.obsolete` de VS Code y de `browsers.json` de Playwright; la medicion de las caches que se limpian con un comando; la busqueda de `node_modules` viejos y de navegadores de Playwright sin usar (en carpetas de prueba); la duracion de los pasos y la deteccion de pasos lentos; el borrado de carpetas y de la papelera (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; las consultas en segundo plano (que no esperen para siempre); el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
 | PSScriptAnalyzer | Solo si esta instalado (`Install-Module PSScriptAnalyzer -Scope CurrentUser`). Es opcional. |
 
 Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commit, activa el hook una vez en cada equipo con `git config core.hooksPath .githooks`.
 
 ## Historial de cambios
 
+- **2026-11-27** - Mas limpieza para desarrollo y mas datos en el resumen:
+  - Paso 4: versiones viejas de extensiones de VS Code que el propio VS Code marco para borrar (con VS Code cerrado).
+  - Paso 6: pregunta para borrar los navegadores de Playwright que ya no usa ningun proyecto; y busqueda (solo informa) de `node_modules` de proyectos sin cambios en 90 dias.
+  - Resumen: duracion de la limpieza con aviso si un paso tarda el triple de lo normal (el tiempo de cada paso se guarda en `historial.csv`, que suma dos columnas; un historial anterior sigue funcionando), tamano de `hiberfil.sys`, plan de energia, apps que se cerraron solas y resultado de la ultima prueba de memoria.
+  - No se agregan: Puppeteer (no se sabe que version usa cada proyecto) ni `wsl --update` (winget ya actualiza WSL en el paso 16). El aviso de poco espacio y el de desgaste o temperatura del SSD ya existian.
 - **2026-11-27** - Arranque y mas caches de desarrollo:
   - Resumen: en "Programas que arrancan con Windows", el tiempo de arranque (mediana de 30 dias comparada con los meses anteriores; aviso si empeoro mucho) y lo que mas lo retraso segun Windows. Sale del registro de rendimiento de Windows, que guarda cada arranque.
   - Paso 6: caches de Composer, uv, Bun y conda, cada una con su comando oficial y solo si la herramienta esta instalada. Gradle y Cargo no se agregan: ya se limpian solos.
