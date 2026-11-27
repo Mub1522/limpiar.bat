@@ -890,6 +890,7 @@ if ($hacerReparacion) {
         -ErrorAction SilentlyContinue -ErrorVariable errRP -WarningAction SilentlyContinue
     $ultimo = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber | Select-Object -Last 1
     $fechaUltimo = if ($ultimo) { $ultimo.ConvertToDateTime($ultimo.CreationTime) }
+    $textoFechaUltimo = if ($fechaUltimo) { $fechaUltimo.ToString('dd/MM/yyyy HH:mm') }   # "$fecha" sale como mes/dia
     if ($errRP) {
         Log "  no se pudo crear: $($errRP[0].Exception.Message)" DarkYellow
         Log "  (suele ser porque la Proteccion del sistema esta desactivada en C:)" DarkYellow
@@ -897,7 +898,7 @@ if ($hacerReparacion) {
         Log "  punto de restauracion creado" Green
     } elseif ($fechaUltimo -and $fechaUltimo -gt (Get-Date).AddHours(-24)) {
         # Windows solo permite uno cada 24 horas; se usa el mas reciente
-        Log "  ya hay uno de las ultimas 24 h, se usa ese: $fechaUltimo" Green
+        Log "  ya hay uno de las ultimas 24 h, se usa ese: $textoFechaUltimo" Green
     } else {
         Log "  Windows no creo el punto de restauracion (sin mensaje de error); la reparacion sigue sin el" DarkYellow
     }
@@ -1121,6 +1122,12 @@ $appsAutoactualizables = @{
     'Microsoft.Edge'         = 'se actualiza sola con Edge Update'
     'Spotify.Spotify'        = 'se actualiza sola (su instalador no funciona como administrador)'
 }
+# Apps cuyo instalador se cancela si estan abiertas, y que el script nunca cierra (puede haber archivos sin
+# guardar). Id de winget -> proceso. Caso real del 26/11/2026: VS Code abierto, el instalador vio "Visual
+# Studio Code esta ejecutandose", cancelo solo y winget devolvio -1978335226 con la ruta de su log como motivo.
+$appsSiAbiertas = @{
+    'Microsoft.VisualStudioCode' = 'Code'
+}
 $appsDisponibles = @(Get-AppsDesactualizadas)
 $estadoWingetInicial = $estadoWinget
 if ($estadoWinget -in 'ok', 'al dia') {
@@ -1134,6 +1141,12 @@ if ($seActualizo) {
     foreach ($app in $appsDisponibles) {
         if ($appsAutoactualizables.ContainsKey($app.Id)) {
             $motivo = $appsAutoactualizables[$app.Id]
+            Log "  omitido $($app.Nombre): $motivo" DarkGray
+            $appsOmitidas += $app | Add-Member -NotePropertyName Motivo -NotePropertyValue $motivo -PassThru -Force
+            continue
+        }
+        if ($appsSiAbiertas.ContainsKey($app.Id) -and (Get-Process $appsSiAbiertas[$app.Id] -ErrorAction SilentlyContinue)) {
+            $motivo = 'estaba abierta (no se cierra): se actualiza sola o en la proxima limpieza con la app cerrada'
             Log "  omitido $($app.Nombre): $motivo" DarkGray
             $appsOmitidas += $app | Add-Member -NotePropertyName Motivo -NotePropertyValue $motivo -PassThru -Force
             continue
@@ -1167,7 +1180,7 @@ if ($seActualizo) {
 }
 # Lo que sigue pendiente despues de actualizar (sin repetir las que fallaron ni las que se actualizan solas)
 $appsPendientes = if ($seActualizo) {
-    @(Get-AppsDesactualizadas | Where-Object { $_.Id -notin $appsFallidas.Id -and -not $appsAutoactualizables.ContainsKey($_.Id) })
+    @(Get-AppsDesactualizadas | Where-Object { $_.Id -notin $appsFallidas.Id -and $_.Id -notin $appsOmitidas.Id -and -not $appsAutoactualizables.ContainsKey($_.Id) })
 } else { $appsDisponibles }
 # winget a veces dice que instalo bien pero despues la sigue listando con la misma version disponible
 # (le pasaba a Google Play Games: no lee bien su version). No contarla como actualizada ni como pendiente.
