@@ -144,3 +144,77 @@ Describe 'ConvertFrom-RespuestaSiNo (preguntas del inicio)' {
         ConvertFrom-RespuestaSiNo 'si a todas' | Should BeNullOrEmpty
     }
 }
+
+Describe 'ConvertFrom-FichaPapelera (paso 1)' {
+    It 'lee la ficha de Windows 10+ (version 2)' {
+        $fecha = Get-Date '2026-10-01 14:30:00'
+        $ruta = 'C:\Usuario\Descargas\instalador.exe'
+        $ms = New-Object IO.MemoryStream; $w = New-Object IO.BinaryWriter $ms
+        $w.Write([int64]2); $w.Write([int64]123456); $w.Write([int64]$fecha.ToFileTime())
+        $w.Write([int32]($ruta.Length + 1)); $w.Write([Text.Encoding]::Unicode.GetBytes($ruta + [char]0)); $w.Flush()
+        $r = ConvertFrom-FichaPapelera $ms.ToArray()
+        $r.Bytes | Should Be 123456
+        $r.Fecha | Should Be $fecha
+        $r.Ruta | Should Be $ruta
+    }
+
+    It 'lee la ficha de Windows 8.1 o anterior (version 1, ruta de largo fijo)' {
+        $fecha = Get-Date '2020-01-02 03:04:05'
+        $bytes = New-Object byte[] 544
+        [BitConverter]::GetBytes([int64]1).CopyTo($bytes, 0)
+        [BitConverter]::GetBytes([int64]42).CopyTo($bytes, 8)
+        [BitConverter]::GetBytes([int64]$fecha.ToFileTime()).CopyTo($bytes, 16)
+        [Text.Encoding]::Unicode.GetBytes('D:\viejo.txt').CopyTo($bytes, 24)
+        $r = ConvertFrom-FichaPapelera $bytes
+        $r.Ruta | Should Be 'D:\viejo.txt'
+        $r.Fecha | Should Be $fecha
+    }
+
+    It 'devuelve $null si no la reconoce (muy corta, otra version o fecha invalida)' {
+        ConvertFrom-FichaPapelera ([byte[]](1, 2, 3)) | Should BeNullOrEmpty
+        ConvertFrom-FichaPapelera $null | Should BeNullOrEmpty
+        $otra = New-Object byte[] 64
+        [BitConverter]::GetBytes([int64]7).CopyTo($otra, 0)
+        [BitConverter]::GetBytes([int64]1000).CopyTo($otra, 16)
+        ConvertFrom-FichaPapelera $otra | Should BeNullOrEmpty
+        $sinFecha = New-Object byte[] 64
+        [BitConverter]::GetBytes([int64]2).CopyTo($sinFecha, 0)
+        ConvertFrom-FichaPapelera $sinFecha | Should BeNullOrEmpty
+    }
+}
+
+Describe 'Select-DispositivosConProblema (paso 17)' {
+    $lista = @(
+        [pscustomobject]@{ Name = 'Teclado'; ConfigManagerErrorCode = 0; PNPClass = 'Keyboard'; PNPDeviceID = 'HID\A' }
+        [pscustomobject]@{ Name = 'Adaptador apagado'; ConfigManagerErrorCode = 22; PNPClass = 'Net'; PNPDeviceID = 'PCI\B' }
+        [pscustomobject]@{ Name = 'Mando desconectado'; ConfigManagerErrorCode = 45; PNPClass = 'HIDClass'; PNPDeviceID = 'USB\C' }
+        [pscustomobject]@{ Name = 'Camara'; ConfigManagerErrorCode = 43; PNPClass = 'Camera'; PNPDeviceID = 'USB\D' }
+        [pscustomobject]@{ Name = $null; ConfigManagerErrorCode = 28; PNPClass = $null; PNPDeviceID = 'ACPI\E' }
+    )
+    $r = Select-DispositivosConProblema $lista
+
+    It 'ignora los que funcionan, los deshabilitados a proposito (22) y los desconectados (45)' {
+        $r.Count | Should Be 2
+        $r[0].Nombre | Should Be 'Camara'
+        $r[0].Codigo | Should Be 43
+    }
+
+    It 'sin nombre usa el Id del dispositivo' {
+        $r[1].Nombre | Should Be 'ACPI\E'
+    }
+
+    It 'si todo funciona devuelve una lista vacia, no $null (que el resumen leeria como "no se pudo leer")' {
+        $vacia = Select-DispositivosConProblema @($lista[0])
+        ($null -eq $vacia) | Should Be $false
+        @($vacia).Count | Should Be 0
+        Mock Get-CimInstance { $lista[0] }
+        $leida = Get-DispositivosConProblema
+        ($null -eq $leida) | Should Be $false
+        @($leida).Count | Should Be 0
+    }
+
+    It 'explica los codigos conocidos y muestra el numero de los demas' {
+        Get-TextoProblemaDispositivo 28 | Should Be 'sin driver'
+        Get-TextoProblemaDispositivo 999 | Should Be 'codigo 999'
+    }
+}

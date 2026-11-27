@@ -58,6 +58,26 @@ function Restore-ModoConsola($modo) {
     try { [void][Limpieza.Consola]::SetConsoleMode([Limpieza.Consola]::GetStdHandle(-10), [uint32]$modo) } catch { }
 }
 
+# Espera un trabajo en segundo plano (Start-Job) hasta $segundos y lo quita. Devuelve Ok, Resultado
+# (lo que devolvio el trabajo) y Error. Si no termina a tiempo se detiene (nada externo traba la
+# ejecucion para siempre); quien lo llama repite la consulta en primer plano si falla.
+function Receive-TrabajoConLimite($trabajo, $segundos) {
+    if (-not $trabajo) { return [pscustomobject]@{ Ok = $false; Resultado = $null; Error = 'no se pudo iniciar' } }
+    if (-not (Wait-Job $trabajo -Timeout $segundos)) {
+        Stop-Job $trabajo
+        Remove-Job $trabajo -Force
+        return [pscustomobject]@{ Ok = $false; Resultado = $null; Error = "no termino en $segundos s" }
+    }
+    $resultado = @(Receive-Job $trabajo -ErrorAction SilentlyContinue -ErrorVariable errTrabajo)
+    $estado = "$($trabajo.State)"
+    Remove-Job $trabajo -Force
+    if ($estado -ne 'Completed') {
+        $motivo = if ($errTrabajo) { $errTrabajo[0].Exception.Message } else { "estado $estado" }
+        return [pscustomobject]@{ Ok = $false; Resultado = $null; Error = $motivo }
+    }
+    return [pscustomobject]@{ Ok = $true; Resultado = $resultado; Error = $null }
+}
+
 # Tamano legible: en GB desde 1000 MB, porque "1.010 MB" se confunde con 1 MB por el separador de miles
 function Format-Tamano($bytes) {
     if ($bytes -ge 1000MB) { return '{0:N2} GB' -f ($bytes / 1GB) }
@@ -417,8 +437,27 @@ function Get-Columna($linea, $desde, $hasta) {
 # Deja en $script:estadoWinget si la consulta funciono, para no decir "todo al dia" cuando
 # en realidad winget fallo (sin internet, no instalado...):
 #   'ok' (hay tabla), 'al dia' (winget confirma que no hay nada), 'no instalado' o 'error (codigo N)'
-function Get-AppsDesactualizadas {
+#
+# Con $trabajo (de Start-ConsultaWinget) usa la lista que se consulto en segundo plano mientras corrian los
+# pasos anteriores; si esa consulta fallo, o algun Id salio recortado con "..." (winget ajusta la tabla al
+# ancho de la consola, y el trabajo no tiene ventana), la repite aqui.
+function Get-AppsDesactualizadas($trabajo = $null) {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { $script:estadoWinget = 'no instalado'; return }
+    if ($trabajo) {
+        $r = Receive-TrabajoConLimite $trabajo 300
+        $previa = @($r.Resultado)[0]
+        if ($r.Ok -and $previa -and $null -ne $previa.Codigo) {
+            $tabla = ConvertFrom-TablaWinget @($previa.Salida) $previa.Codigo
+            if (-not @($tabla.Apps | Where-Object { $_.Id -match [char]0x2026 })) {
+                Log "  lista consultada en segundo plano mientras corrian los pasos anteriores" DarkGray
+                $script:estadoWinget = $tabla.Estado
+                return $tabla.Apps
+            }
+            Log "  la lista en segundo plano salio recortada: se consulta de nuevo" DarkYellow
+        } else {
+            Log "  la consulta en segundo plano fallo ($(if ($r.Error) { $r.Error } else { 'sin resultado' })): se consulta de nuevo" DarkYellow
+        }
+    }
     $encAnterior = [Console]::OutputEncoding
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     try { $salida = winget upgrade --accept-source-agreements --disable-interactivity 2>$null }
@@ -426,6 +465,97 @@ function Get-AppsDesactualizadas {
     $tabla = ConvertFrom-TablaWinget $salida $LASTEXITCODE
     $script:estadoWinget = $tabla.Estado
     $tabla.Apps
+}
+
+# Empieza "winget upgrade" (solo lista, no actualiza nada) en segundo plano: tarda 10-30 s esperando a la
+# red, y asi esta listo al llegar al paso 16. $null si winget no esta o no se pudo iniciar.
+function Start-ConsultaWinget {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $null }
+    Start-Job -ErrorAction SilentlyContinue -ScriptBlock {
+        try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+        $salida = winget upgrade --accept-source-agreements --disable-interactivity 2>$null
+        [pscustomobject]@{ Salida = @($salida); Codigo = $LASTEXITCODE }
+    }
+}
+
+# --- Papelera de reciclaje (paso 1) ---
+# Cada elemento son dos archivos en <unidad>:\$Recycle.Bin\<SID del usuario>: $R... es lo borrado y
+# $I... su ficha (tamano, fecha en que se borro y ruta original). Se lee la fecha de la ficha porque la del
+# archivo es la de su ultima modificacion, no la del borrado.
+
+# Lee una ficha $I (bytes). Version 1 (Vista a 8.1): ruta fija de 260 caracteres desde el byte 24.
+# Version 2 (Windows 10+): largo de la ruta en el byte 24 y la ruta desde el 28. $null si no se reconoce.
+function ConvertFrom-FichaPapelera($bytes) {
+    if (-not $bytes -or $bytes.Length -lt 28) { return $null }
+    $version = [BitConverter]::ToInt64($bytes, 0)
+    $horaArchivo = [BitConverter]::ToInt64($bytes, 16)
+    # 2650467743999999999 = 31/12/9999, la ultima fecha que acepta FromFileTimeUtc
+    if ($horaArchivo -le 0 -or $horaArchivo -gt 2650467743999999999) { return $null }
+    $ruta = switch ($version) {
+        1 { [Text.Encoding]::Unicode.GetString($bytes, 24, [math]::Min(520, $bytes.Length - 24)) }
+        2 {
+            $largo = [BitConverter]::ToInt32($bytes, 24)
+            [Text.Encoding]::Unicode.GetString($bytes, 28, [math]::Max(0, [math]::Min(2 * $largo, $bytes.Length - 28)))
+        }
+        default { return $null }
+    }
+    [pscustomobject]@{
+        Bytes = [BitConverter]::ToInt64($bytes, 8)
+        Fecha = [DateTime]::FromFileTimeUtc($horaArchivo).ToLocalTime()
+        Ruta  = $ruta.Split([char]0)[0]
+    }
+}
+
+# Carpetas de la papelera del usuario actual, una por unidad fija. Solo las suyas: la papelera de otra
+# cuenta del equipo es de esa persona.
+function Get-CarpetasPapelera {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and "$($_.DriveType)" -eq 'Fixed' } |
+        ForEach-Object { "$($_.DriveLetter):\`$Recycle.Bin\$sid" } | Where-Object { Test-Path -LiteralPath $_ }
+}
+
+# Elementos de esas carpetas que se borraron hace mas de $dias dias, del mas grande al mas chico
+function Get-PapeleraVieja($carpetas, $dias) {
+    $limite = (Get-Date).AddDays(-$dias)
+    @(foreach ($carpeta in $carpetas) {
+        foreach ($ficha in Get-ChildItem -LiteralPath $carpeta -Force -File -Filter '$I*' -ErrorAction SilentlyContinue) {
+            $info = ConvertFrom-FichaPapelera (Get-Content -LiteralPath $ficha.FullName -Encoding Byte -ReadCount 0 -ErrorAction SilentlyContinue)
+            if (-not $info -or $info.Fecha -gt $limite) { continue }
+            $contenido = Join-Path $carpeta ('$R' + $ficha.Name.Substring(2))
+            # Ficha sin contenido (el Explorador no la muestra): cuenta 0, no el tamano original que dice la
+            # ficha. Pasaba en este equipo el 27/11/2026: 3 de 4 fichas eran de cosas que ya no estaban.
+            $existe = Test-Path -LiteralPath $contenido
+            [pscustomobject]@{
+                Nombre    = Split-Path $info.Ruta -Leaf
+                Fecha     = $info.Fecha
+                Bytes     = if ($existe) { [double][math]::Max(0, $info.Bytes) } else { [double]0 }
+                Ficha     = $ficha.FullName
+                Contenido = $contenido
+            }
+        }
+    }) | Sort-Object Bytes -Descending
+}
+
+# Borra esos elementos (lo borrado y su ficha) y devuelve los MB liberados, medidos en el disco
+function Remove-ElementosPapelera($elementos) {
+    $liberado = 0; $borrados = 0; $omitidos = 0
+    foreach ($e in $elementos) {
+        $bytes = 0
+        if (Test-Path -LiteralPath $e.Contenido) {
+            $item = Get-Item -LiteralPath $e.Contenido -Force
+            $bytes = if ($item.PSIsContainer) { [double](Get-FolderSize $item.FullName) } else { [double]$item.Length }
+            Remove-Item -LiteralPath $e.Contenido -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable err
+            if ($err) { Log "  en uso, omitido: $($e.Nombre)" DarkYellow; $omitidos++; continue }
+        }
+        # Sin su ficha, Windows deja de mostrarlo en la papelera
+        Remove-Item -LiteralPath $e.Ficha -Force -ErrorAction SilentlyContinue
+        Log "  borrado: $($e.Nombre) (de la papelera)" DarkGray
+        $liberado += $bytes
+        $borrados++
+    }
+    $mb = [math]::Round($liberado / 1MB, 2)
+    Log "  papelera: $borrados borrados, $omitidos omitidos, $mb MB liberados" Green
+    return $mb
 }
 
 # Lee la salida de "winget upgrade" (lineas de texto) y su codigo de salida. Devuelve Estado
@@ -469,6 +599,7 @@ $maxPuntos = 2         # puntos de restauracion a conservar (se borran los mas v
 $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modificar en este tiempo
 $diasVolcados = 7      # paso 7: si hubo un pantallazo azul en estos dias, se conservan los volcados de memoria
 $diasRestosActualizacion = 10  # paso 9: restos de una actualizacion grande solo se ofrecen borrar pasado este tiempo
+$diasPapelera = 30     # paso 1: de la papelera solo se ofrece borrar lo que lleva ahi mas de este tiempo
 
 $navegadores = @(
     @{ Nombre = 'Chrome';  Proceso = 'chrome';  Datos = "$env:LOCALAPPDATA\Google\Chrome\User Data" },
@@ -514,9 +645,21 @@ foreach ($app in $appsChat) {
     $app.Bytes = [double](($app.Carpetas | ForEach-Object { Get-FolderSize $_ } | Measure-Object -Sum).Sum)
 }
 $restosActualizacion = @(Get-RestosActualizacion)
+# Papelera: lo que lleva ahi mas de $diasPapelera dias (lo mismo que borra el Sensor de almacenamiento de Windows)
+$papeleraVieja = @(Get-PapeleraVieja @(Get-CarpetasPapelera) $diasPapelera)
+$bytesPapelera = [double]($papeleraVieja | Measure-Object Bytes -Sum).Sum
 
 # Solo se pregunta lo que aplica en este equipo y en este momento
 $preguntas = New-Object System.Collections.ArrayList
+if ($bytesPapelera -gt 50MB) {
+    # Son archivos que el usuario borro, no cache: se muestra que hay y se pregunta siempre
+    $detalle = @("$($papeleraVieja.Count) elemento(s) que borraste hace mas de $diasPapelera dias; ocupan $(Format-Tamano $bytesPapelera). Lo mas reciente se conserva.")
+    $detalle += 'Los mas grandes:'
+    $detalle += $papeleraVieja | Select-Object -First 5 | ForEach-Object { "  - $($_.Nombre) ($(Format-Tamano $_.Bytes), borrado el $($_.Fecha.ToString('dd/MM/yyyy')))" }
+    if ($papeleraVieja.Count -gt 5) { $detalle += "  y $($papeleraVieja.Count - 5) mas." }
+    $detalle += 'Despues ya no se pueden recuperar.'
+    [void]$preguntas.Add(@{ Clave = 'papelera'; Titulo = 'Vaciar lo viejo de la papelera de reciclaje'; Detalle = $detalle })
+}
 foreach ($nav in $navegadores) {
     if (Get-Process $nav.Proceso -ErrorAction SilentlyContinue) {
         [void]$preguntas.Add(@{ Clave = "nav:$($nav.Nombre)"; Titulo = "Cerrar $($nav.Nombre) para limpiar su cache"
@@ -628,6 +771,7 @@ $hacerCompactar       = [bool]$respuestas['compactar']
 $hacerActualizar      = [bool]$respuestas['actualizar']
 $borrarNuget          = [bool]$respuestas['nuget']
 $borrarLogsPm2        = [bool]$respuestas['pm2']
+$borrarPapelera       = [bool]$respuestas['papelera']
 
 Write-SeccionConsola 'LIMPIEZA EN CURSO'
 Log "Todo listo: puedes dejar la ventana y volver cuando aparezca el resumen." Cyan
@@ -643,10 +787,21 @@ $marcasViejas = @(Remove-PerfilLiberador)
 if ($marcasViejas) {
     Log "Se quito el perfil temporal del Liberador de espacio que dejo una ejecucion anterior cortada ($($marcasViejas -join ', '))" DarkYellow
 }
+# La lista de winget (paso 16) solo espera a la red: se consulta en segundo plano desde ya
+$trabajoWinget = Start-ConsultaWinget
 
-# --- Paso 1: archivos temporales del usuario ---
-Log "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h" Yellow
+# --- Paso 1: archivos temporales del usuario y lo viejo de la papelera ---
+Log "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h, y papelera de reciclaje" Yellow
 $total += Clear-Folder $env:TEMP -HorasMinimas $horasTemporales
+if ($borrarPapelera) {
+    Log "  papelera: lo borrado hace mas de $diasPapelera dias..."
+    $total += Remove-ElementosPapelera $papeleraVieja
+} elseif ($papeleraVieja) {
+    $porque = if ($bytesPapelera -gt 50MB) { 'respondiste N' } else { 'ocupa 50 MB o menos' }
+    Log "  papelera conservada: $($papeleraVieja.Count) elemento(s) de hace mas de $diasPapelera dias, $(Format-Tamano $bytesPapelera) ($porque)" DarkGray
+} else {
+    Log "  papelera: nada de hace mas de $diasPapelera dias" DarkGray
+}
 
 # --- Paso 2: temporales de Windows ---
 $winTemp = Join-Path $env:SystemRoot 'Temp'
@@ -952,6 +1107,10 @@ if ($hacerReparacion) {
 } else {
     Log "  reparacion omitida" DarkYellow
 }
+# Windows Update tarda 30-60 s en buscar: se consulta en segundo plano durante los pasos 11 a 16 y se recoge
+# en el 17. Recien ahora: el paso 3 detiene su servicio y los pasos 9 y 10 trabajan con los componentes de
+# Windows (DISM, SFC), y no conviene que la busqueda corra al mismo tiempo.
+$trabajoWu = Start-ConsultaWindowsUpdate
 
 # --- Paso 11: limpieza de Docker ---
 # Va antes de compactar: lo que borra Docker queda libre dentro de su disco virtual,
@@ -1166,7 +1325,7 @@ $appsAutoactualizables = @{
 $appsSiAbiertas = @{
     'Microsoft.VisualStudioCode' = 'Code'
 }
-$appsDisponibles = @(Get-AppsDesactualizadas)
+$appsDisponibles = @(Get-AppsDesactualizadas $trabajoWinget)
 $estadoWingetInicial = $estadoWinget
 if ($estadoWinget -in 'ok', 'al dia') {
     Log "  $($appsDisponibles.Count) aplicacion(es) con actualizacion disponible"
@@ -1238,7 +1397,15 @@ if ($seActualizo) {
 # resumen; el detalle (titulos de actualizaciones, etc.) queda aqui en el log.
 Log "Paso 17: revision de salud del equipo (solo lectura)" Yellow
 $discoSistema = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
-$salud = Get-SaludEquipo $discoSistema $true
+# Windows Update ya se consulto en segundo plano (se empezo despues del paso 10); si fallo, se repite aqui
+$consultaWu = Receive-TrabajoConLimite $trabajoWu 300
+$wuPrevia = if ($consultaWu.Ok) { @($consultaWu.Resultado)[0] }
+if (-not $wuPrevia -or $wuPrevia.Error) {
+    $motivo = if ($wuPrevia.Error) { $wuPrevia.Error } elseif ($consultaWu.Error) { $consultaWu.Error } else { 'sin resultado' }
+    Log "  la consulta de Windows Update en segundo plano fallo ($motivo): se repite ahora" DarkYellow
+    $wuPrevia = $null
+}
+$salud = Get-SaludEquipo $discoSistema $true $wuPrevia
 
 Log "=== Limpieza completada ===" Cyan
 

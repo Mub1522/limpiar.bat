@@ -38,7 +38,8 @@ Describe 'Lo que el script no hace (CLAUDE.md 2.2)' {
         @{ Patron = 'Stop-Programa\s+Code\b';      Motivo = 'VS Code puede tener archivos sin guardar' },
         @{ Patron = 'Write-Host[^\r\n]*-NoNewline'; Motivo = 'el transcript de PS 5.1 corta la linea (CLAUDE.md 6.2)' },
         @{ Patron = 'wsl\.exe[^\r\n]*\|\s*Select-Object\s+-First'; Motivo = 'mata wsl.exe y deja la consola en escalera (CLAUDE.md 6.1)' },
-        @{ Patron = 'Remove-Item[^\r\n]*(Windows\.old|WINDOWS\.~)'; Motivo = 'los restos de actualizacion solo los borra el Liberador de espacio' }
+        @{ Patron = 'Remove-Item[^\r\n]*(Windows\.old|WINDOWS\.~)'; Motivo = 'los restos de actualizacion solo los borra el Liberador de espacio' },
+        @{ Patron = 'Clear-RecycleBin|SHEmptyRecycleBin'; Motivo = 'vacian la papelera entera: solo se borra lo de mas de $diasPapelera dias' }
     )
     foreach ($p in $prohibidos) {
         It "no usa /$($p.Patron)/: $($p.Motivo)" {

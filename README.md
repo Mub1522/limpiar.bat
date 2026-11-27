@@ -43,13 +43,13 @@ No se instala nada: es una carpeta que se copia y se ejecuta. No crea servicios 
 
 | Que | Donde | Tamano |
 |---|---|---|
-| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~220 KB (~280 KB con `tests\` y las herramientas de desarrollo) |
+| La carpeta del script | Donde la copies (por ejemplo `C:\Herramientas\limpiar.bat`) | ~290 KB (~350 KB con `tests\` y las herramientas de desarrollo) |
 | `limpieza.log` | En la carpeta, se reemplaza en cada ejecucion | 30-300 KB |
 | `historial.csv` | En la carpeta, guarda las ultimas 200 ejecuciones | 10 KB como maximo |
 | Acceso directo `Limpieza Windows` (opcional) | Escritorio | 2 KB |
 | Puntos de restauracion | Los de Windows (Proteccion del sistema) | Se conservan solo los 2 mas recientes (paso 15) |
 
-Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Windows (`StateFlags0042` en el registro), y lo quita al terminar. Si la ejecucion se corta, la siguiente lo quita al empezar.
+Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Windows (`StateFlags0042` en el registro), y lo quita al terminar. Si la ejecucion se corta, la siguiente lo quita al empezar. Las consultas de winget y Windows Update se hacen en segundo plano (otro proceso de PowerShell que termina con la ejecucion) y no dejan nada en el equipo.
 
 ### Pasos
 
@@ -101,6 +101,7 @@ Al abrirse, el script muestra un encabezado (equipo y fecha) y luego las pregunt
 
 Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escribir nada no vale**: hay que elegir. Con `T` (o `todas`) se responde **si a esa y a todas las que faltan**: las tarjetas siguientes se muestran igual, ya marcadas con `-> SI (todas)`, sin preguntar. Escribirla en la primera marca todo con S. Cualquier otra respuesta se vuelve a preguntar. Debajo de cada pregunta queda la respuesta (`-> SI` / `-> NO`), tambien en el log.
 
+- **Vaciar lo viejo de la papelera de reciclaje** (solo si lo que borraste hace mas de 30 dias ocupa mas de 50 MB). Muestra cuantos elementos son, cuanto ocupan y los 5 mas grandes con la fecha en que los borraste. Lo de los ultimos 30 dias se conserva. Despues ya no se pueden recuperar.
 - **Cerrar el navegador** (solo si hay uno abierto) para limpiar su cache. Se cierra recien al llegar al paso 4.
 - **Cerrar Teams, Discord o Slack** (solo si esta abierto y su cache pasa de 50 MB) para limpiar su cache. Se cierra al llegar al paso 4 y no se vuelve a abrir solo; si estas en una llamada, responde N.
 - **Borrar la cache de NuGet (.NET)** (solo si ocupa mas de 50 MB). Muestra cuanto ocupa; la proxima compilacion de un proyecto .NET volvera a descargar sus paquetes.
@@ -117,7 +118,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
 ### Limpieza
 
-1. **Temporales del usuario** (`%TEMP%`): solo lo que no se modifico en las ultimas 24 h
+1. **Temporales del usuario** (`%TEMP%`): solo lo que no se modifico en las ultimas 24 h. Y, si respondiste S, **lo viejo de la papelera de reciclaje**: solo lo que borraste hace mas de 30 dias (lo mismo que hace el Sensor de almacenamiento de Windows), en todas las unidades, y solo de tu cuenta (la papelera de otra cuenta del equipo no se toca). La fecha es la del borrado, no la del archivo
 2. **Temporales de Windows** (`C:\Windows\Temp`): igual, solo lo de mas de 24 h
 
    En las carpetas temporales hay archivos de programas que estan trabajando en ese momento (instaladores, Docker, etc.) y que no siempre estan bloqueados; borrarlos puede romper esos programas. Por eso se conserva lo reciente, igual que hace la Liberacion de espacio de Windows. Una carpeta se conserva si cualquier archivo dentro de ella es reciente.
@@ -149,11 +150,11 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 13. **Compactar discos virtuales de Docker y WSL** (si respondiste S): libera los bloques sin uso (`fstrim`) dentro de Ubuntu y dentro de los datos de Docker, apaga Docker y WSL, compacta cada `.vhdx` y vuelve a abrir Docker Desktop si estaba abierto. No borra nada de adentro, solo achica el archivo. Lo liberado se mide por cuanto achico cada `.vhdx` (no por el espacio libre de C:, que se mezclaria con el archivo de intercambio de WSL que Windows borra al apagarlo). Para recuperar lo que borro Docker, Docker Desktop tiene que estar abierto al empezar (sus datos solo se pueden liberar con Docker en marcha)
 14. **TRIM del SSD** (despues de compactar). Si falla, el log dice por que y el resumen lo avisa (por ejemplo, Windows no lo hace mientras C: tenga una reparacion pendiente)
 15. **Puntos de restauracion**: si hay mas de 2, borra los mas viejos
-16. **Aplicaciones desactualizadas (winget)**: siempre las lista; si respondiste S las actualiza una por una. Se saltan las que se actualizan solas: *App Installer* (actualizarlo cierra el propio winget; lo actualiza la Microsoft Store), *Microsoft Edge* (winget no puede actualizarlo; lo hace Edge Update) y *Spotify* (su instalador no funciona como administrador; se actualiza sola). Tambien se salta *VS Code* si esta abierto: su instalador se cancela solo y el script nunca lo cierra (puede haber archivos sin guardar). Salen en el resumen como "Se actualizan solas", con el motivo. Si winget dice que instalo una app pero despues la sigue listando como desactualizada, sale en "No se pudieron actualizar" con ese motivo (no como actualizada ni como pendiente)
+16. **Aplicaciones desactualizadas (winget)**: siempre las lista; si respondiste S las actualiza una por una. La lista se consulta en segundo plano desde el inicio de la limpieza (tarda 10-30 s esperando a internet), asi que al llegar a este paso ya suele estar lista; si esa consulta fallo, se repite aqui. Se saltan las que se actualizan solas: *App Installer* (actualizarlo cierra el propio winget; lo actualiza la Microsoft Store), *Microsoft Edge* (winget no puede actualizarlo; lo hace Edge Update) y *Spotify* (su instalador no funciona como administrador; se actualiza sola). Tambien se salta *VS Code* si esta abierto: su instalador se cancela solo y el script nunca lo cierra (puede haber archivos sin guardar). Salen en el resumen como "Se actualizan solas", con el motivo. Si winget dice que instalo una app pero despues la sigue listando como desactualizada, sale en "No se pudieron actualizar" con ese motivo (no como actualizada ni como pendiente)
 
 ### Revision
 
-17. **Revision de salud del equipo** (solo lectura, no cambia nada; tarda alrededor de un minuto): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada), revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
+17. **Revision de salud del equipo** (solo lectura, no cambia nada): consulta Windows Update (las actualizaciones pendientes y opcionales, la ultima instalada y las que fallaron; no instala nada). Esa busqueda tarda 30-60 s y se hace en segundo plano desde que termina el paso 10, mientras corren los pasos 11 a 16; empieza despues del 10 porque el paso 3 detiene el servicio de Windows Update y los pasos 9 y 10 trabajan con los componentes de Windows. Si esa consulta fallo, se repite aqui. Ademas busca dispositivos con problemas (Administrador de dispositivos), revisa el sistema de archivos de C: sin reiniciar (`Repair-Volume -Scan`; Windows corrige en el momento los errores menores que puede, como hace por su cuenta) y junta el resto de los datos de salud del resumen. El detalle (titulos de las actualizaciones, etc.) queda en el log
 
 ### Resumen final
 
@@ -167,6 +168,7 @@ Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo. E
   - Espacio en C: GB libres y porcentaje (aviso por debajo del 15 %, cuando Windows y sus actualizaciones empiezan a tener problemas)
   - Bateria (solo portatiles): capacidad actual frente a la original y ciclos (aviso por debajo del 80 %)
   - Hardware (30 dias): errores de memoria RAM, CPU o disco que registra Windows (WHEA). Aviso si hay alguno grave o 10 o mas corregidos (unos pocos corregidos son normales)
+  - Dispositivos: los que el Administrador de dispositivos marca con un problema (hasta 3 con su nombre y que les pasa; la lista completa en el log). Aviso si alguno no inicia, fallo o tiene el driver danado. Si solo les falta el driver, solo se informa (suele ser un componente secundario que funciona sin el). No cuentan los que deshabilitaste ni los que estan desconectados
   - Cuelgues (30 dias): pantallazos azules y apagados inesperados (cortes de luz, boton de encendido), segun el registro de eventos de Windows (eventos 1001 y 41); aviso si hubo alguno
 - **Windows y seguridad**:
   - Windows Update: cuantas actualizaciones faltan y hace cuanto se instalo la ultima. Aviso si alguna fallo y no se volvio a instalar, o si pasaron mas de 45 dias sin instalar nada (Windows instala cada mes). Las opcionales (drivers, vistas previas) se mencionan aparte
@@ -214,6 +216,7 @@ $maxPuntos = 2         # puntos de restauracion a conservar (se borran los mas v
 $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modificar en este tiempo
 $diasVolcados = 7      # paso 7: si hubo un pantallazo azul en estos dias, se conservan los volcados de memoria
 $diasRestosActualizacion = 10  # paso 9: restos de una actualizacion grande solo se ofrecen borrar pasado este tiempo
+$diasPapelera = 30     # paso 1: de la papelera solo se ofrece borrar lo que lleva ahi mas de este tiempo
 ```
 
 Y el correo, en `correo.json` (ver arriba).
@@ -246,6 +249,7 @@ Si el resumen muestra "Sistema de archivos" con un error pendiente, o "TRIM del 
 - **"Liberar RAM"**: Windows usa la RAM libre como cache a proposito; vaciarla hace que todo cargue mas lento despues.
 - **Borrar `C:\Windows\Installer`**, la cache de miniaturas o instantaneas que no son puntos de restauracion: o es peligroso o libera muy poco.
 - **Desactivar programas de inicio**: solo se informan en el resumen; tu decides cuales quitar.
+- **Vaciar la papelera entera**: lo reciente puede ser algo que borraste por error y todavia quieres recuperar. Solo se ofrece borrar lo de mas de 30 dias, y solo de tu cuenta.
 
 ## Si modificas el script
 
@@ -271,13 +275,17 @@ Pester 3.4 viene con Windows. Si instalaste Pester 5, antes de `Invoke-Pester` c
 |---|---|
 | Sintaxis | Que `limpiar.ps1`, `lib\`, `tests\` y los demas `.ps1` se puedan leer (sin ejecutarlos). |
 | Solo ASCII | Que ningun `.ps1` tenga tildes ni simbolos: Windows PowerShell 5.1 los desfigura. |
-| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`; el borrado de carpetas (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
+| Pruebas | Con Pester 3.4, que viene con Windows. La lectura de las salidas de winget, apt, Docker y `reagentc`, de las fichas de la papelera y de la lista de dispositivos; el borrado de carpetas y de la papelera (que conserve lo reciente), siempre dentro de una carpeta temporal de prueba; las consultas en segundo plano (que no esperen para siempre); el historial y la tendencia del espacio; el resumen (consola y correo a la vez, y que solo los avisos cuenten); que el codigo no use nada de "Lo que no hace, a proposito"; y que sin permisos de administrador el script se cierre antes de hacer nada. |
 | PSScriptAnalyzer | Solo si esta instalado (`Install-Module PSScriptAnalyzer -Scope CurrentUser`). Es opcional. |
 
 Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commit, activa el hook una vez en cada equipo con `git config core.hooksPath .githooks`.
 
 ## Historial de cambios
 
+- **2026-11-27** - Mas rapido, papelera y dispositivos:
+  - Las consultas que solo esperan a internet corren en segundo plano mientras se hacen otros pasos: la lista de winget (paso 16) desde el inicio y la busqueda de Windows Update (paso 17) desde el paso 10. Ahorran alrededor de un minuto. Si una falla o tarda mas de 5 minutos, se repite como antes.
+  - Paso 1: nueva pregunta para vaciar lo que lleva mas de 30 dias en la papelera de reciclaje (solo si pasa de 50 MB), con la lista de lo mas grande. Si una ficha de la papelera ya no tiene su archivo (el Explorador no la muestra), cuenta 0 MB y se quita igual.
+  - Salud del equipo: nueva linea "Dispositivos" con los que el Administrador de dispositivos marca con un problema.
 - **2026-11-27** - Un clic en la ventana ya no detiene la limpieza: mientras corre se desactiva la seleccion con el mouse (edicion rapida de la consola) y al final se vuelve a activar. En una ejecucion real, la limpieza quedo 10 minutos parada en el paso 17 hasta que se presiono Enter.
 - **2026-11-26** - Nueva seccion "Reparar el disco" (en Recomendaciones de uso): que hacer cuando el resumen muestra un error del sistema de archivos o el TRIM bloqueado, incluido el modo de recuperacion cuando `chkdsk` no funciona dentro de Windows. El resumen remite a esa seccion y el log deja los pasos.
 - **2026-11-26** - Tras la primera ejecucion real de esta version: el paso 16 ya no intenta actualizar VS Code si esta abierto (su instalador se cancelaba y el resumen mostraba como motivo la ruta de un log); ahora sale en "Se actualizan solas" con el motivo. El paso 10 muestra la fecha del punto de restauracion como dia/mes.

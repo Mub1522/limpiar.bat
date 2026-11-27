@@ -105,3 +105,65 @@ Describe 'Format-Tamano' {
         Format-Tamano 3.1GB | Should Match '^3[.,]10 GB$'
     }
 }
+
+# Ficha $I de la papelera (formato de Windows 10+): version 2, tamano, fecha del borrado y ruta original
+function New-FichaPapelera($rutaOriginal, $bytes, $fechaBorrado) {
+    $ms = New-Object IO.MemoryStream
+    $w = New-Object IO.BinaryWriter $ms
+    $w.Write([int64]2)
+    $w.Write([int64]$bytes)
+    $w.Write([int64]$fechaBorrado.ToFileTime())
+    $w.Write([int32]($rutaOriginal.Length + 1))
+    $w.Write([Text.Encoding]::Unicode.GetBytes($rutaOriginal + [char]0))
+    $w.Flush()
+    return , $ms.ToArray()
+}
+
+# Un elemento de la papelera: la ficha $I<id> y el contenido $R<id> (archivo, o carpeta con -Carpeta)
+function New-ElementoPapelera($carpeta, $id, $nombre, $bytes, $diasAtras, [switch]$EsCarpeta, [switch]$SinContenido) {
+    New-Item -ItemType Directory -Force $carpeta | Out-Null
+    [IO.File]::WriteAllBytes("$carpeta\`$I$id", (New-FichaPapelera "C:\Usuario\$nombre" $bytes (Get-Date).AddDays(-$diasAtras)))
+    if ($SinContenido) { return }
+    if ($EsCarpeta) { New-ArchivoPrueba "$carpeta\`$R$id\dentro\a.bin" $bytes }
+    else { [IO.File]::WriteAllBytes("$carpeta\`$R$id", (New-Object byte[] $bytes)) }
+}
+
+Describe 'Papelera (paso 1)' {
+    $pap = "$TestDrive\papelera"
+    New-ElementoPapelera $pap 'AAA111.zip' 'viejo.zip' 2MB 40
+    New-ElementoPapelera $pap 'BBB222' 'carpeta-vieja' 1MB 35 -EsCarpeta
+    New-ElementoPapelera $pap 'CCC333.iso' 'reciente.iso' 3MB 5
+
+    It 'solo lista lo borrado hace mas de los dias indicados, del mas grande al mas chico' {
+        $viejos = @(Get-PapeleraVieja @($pap) 30)
+        $viejos.Count | Should Be 2
+        $viejos[0].Nombre | Should Be 'viejo.zip'
+        $viejos[1].Nombre | Should Be 'carpeta-vieja'
+        $viejos[0].Bytes | Should Be 2MB
+    }
+
+    It 'borra lo viejo (contenido y ficha), conserva lo reciente y devuelve los MB liberados' {
+        $liberado = Remove-ElementosPapelera @(Get-PapeleraVieja @($pap) 30)
+        $liberado | Should Be 3
+        Test-Path -LiteralPath "$pap\`$RAAA111.zip" | Should Be $false
+        Test-Path -LiteralPath "$pap\`$IAAA111.zip" | Should Be $false
+        Test-Path -LiteralPath "$pap\`$RBBB222" | Should Be $false
+        Test-Path -LiteralPath "$pap\`$RCCC333.iso" | Should Be $true
+        Test-Path -LiteralPath "$pap\`$ICCC333.iso" | Should Be $true
+    }
+
+    It 'una ficha sin contenido cuenta 0 bytes (no lo que dice la ficha) y se quita igual' {
+        New-ElementoPapelera "$TestDrive\huerfana" 'DDD444.txt' 'huerfano.txt' 5MB 60 -SinContenido
+        $huerfanas = @(Get-PapeleraVieja @("$TestDrive\huerfana") 30)
+        $huerfanas.Count | Should Be 1
+        $huerfanas[0].Bytes | Should Be 0
+        Remove-ElementosPapelera $huerfanas | Should Be 0
+        Test-Path -LiteralPath "$TestDrive\huerfana\`$IDDD444.txt" | Should Be $false
+    }
+
+    It 'no falla con una ficha danada' {
+        New-Item -ItemType Directory -Force "$TestDrive\danada" | Out-Null
+        [IO.File]::WriteAllBytes("$TestDrive\danada\`$IEEE555", [byte[]](1, 2, 3))
+        @(Get-PapeleraVieja @("$TestDrive\danada") 30).Count | Should Be 0
+    }
+}

@@ -320,6 +320,20 @@ function Show-Resumen($d) {
     elseif ($h.Corregidos -gt 0) { Write-Estado 'OK' 'Hardware (30 dias)' "$($h.Corregidos) error(es) corregido(s), pocos: normal" }
     else { Write-Estado 'OK' 'Hardware (30 dias)' 'sin errores' }
 
+    # Dispositivos con problema (Administrador de dispositivos). "Sin driver" (28) solo informa: suele ser un
+    # componente secundario que funciona sin driver propio; lo demas (no inicia, fallo, driver danado) avisa.
+    $dv = $salud.Dispositivos
+    if ($null -eq $dv) { Write-Estado 'NA' 'Dispositivos' 'no se pudo leer la lista' }
+    elseif (@($dv).Count -eq 0) { Write-Estado 'OK' 'Dispositivos' 'todos funcionan' }
+    else {
+        $dv = @($dv)
+        $textoDv = "$($dv.Count) con problema: " + (($dv | Select-Object -First 3 | ForEach-Object { "$($_.Nombre) ($(Get-TextoProblemaDispositivo $_.Codigo))" }) -join '; ')
+        if ($dv.Count -gt 3) { $textoDv += "; y $($dv.Count - 3) mas (ver log)" }
+        $textoDv += '. Revisalos en el Administrador de dispositivos (Win+X)'
+        $nivelDv = if (@($dv | Where-Object { $_.Codigo -ne 28 }).Count -gt 0) { 'AVISO' } else { 'INFO' }
+        Write-Estado $nivelDv 'Dispositivos' $textoDv
+    }
+
     $c = $salud.Cuelgues
     if ($null -eq $c) { Write-Estado 'NA' 'Cuelgues (30 dias)' 'no se pudo leer el registro de eventos' }
     elseif ($c.Pantallazos + $c.OtrosApagados -eq 0) { Write-Estado 'OK' 'Cuelgues (30 dias)' 'ningun pantallazo azul ni apagado inesperado' }

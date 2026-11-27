@@ -116,6 +116,48 @@ function Get-EstadoWindowsUpdate {
     }
 }
 
+# Empieza la consulta de Windows Update en segundo plano (Start-Job): la busqueda tarda 30-60 s esperando a
+# Microsoft y asi corre mientras se hacen otros pasos. El trabajo es otro proceso: se le pasa la funcion.
+function Start-ConsultaWindowsUpdate {
+    $definicion = (Get-Command Get-EstadoWindowsUpdate).Definition
+    Start-Job -ErrorAction SilentlyContinue -ScriptBlock (
+        [scriptblock]::Create("function Get-EstadoWindowsUpdate {$definicion}`nGet-EstadoWindowsUpdate"))
+}
+
+# Dispositivos con problema (los del signo amarillo en el Administrador de dispositivos), a partir de los
+# objetos de Win32_PnPEntity. ConfigManagerErrorCode 0 = funciona. No se cuentan 22 (deshabilitado a
+# proposito) ni 45 (no esta conectado ahora): son normales.
+# La coma de "return ," evita que una lista vacia llegue como $null (se confundiria con "no se pudo leer").
+function Select-DispositivosConProblema($dispositivos) {
+    return , @($dispositivos | Where-Object { $_.ConfigManagerErrorCode -and [int]$_.ConfigManagerErrorCode -notin 22, 45 } | ForEach-Object {
+        [pscustomobject]@{
+            Nombre = if ($_.Name) { "$($_.Name)" } else { "$($_.PNPDeviceID)" }
+            Codigo = [int]$_.ConfigManagerErrorCode
+            Clase  = "$($_.PNPClass)"
+            Id     = "$($_.PNPDeviceID)"
+        }
+    })
+}
+
+# Que significa el codigo de problema, en pocas palabras (los mas comunes; el resto, "codigo N")
+function Get-TextoProblemaDispositivo($codigo) {
+    $textos = @{
+        1 = 'mal configurado'; 3 = 'driver danado o sin memoria'; 10 = 'no puede iniciar'
+        12 = 'sin recursos libres'; 14 = 'necesita reiniciar'; 18 = 'hay que reinstalar el driver'
+        19 = 'configuracion danada'; 24 = 'no esta o le faltan drivers'; 28 = 'sin driver'
+        31 = 'el driver no carga'; 39 = 'driver danado o falta'; 43 = 'Windows lo detuvo porque informo un fallo'
+        48 = 'driver bloqueado por problemas conocidos'; 52 = 'driver sin firma valida'
+    }
+    if ($textos.ContainsKey([int]$codigo)) { $textos[[int]$codigo] } else { "codigo $codigo" }
+}
+
+# Lista de dispositivos con problema; $null si no se pudo leer
+function Get-DispositivosConProblema {
+    $todos = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue -ErrorVariable errPnp)
+    if ($errPnp -or -not $todos) { return $null }
+    return , (Select-DispositivosConProblema $todos)
+}
+
 # Firewall, control de cuentas (UAC), Arranque seguro y cifrado del disco C: (BitLocker)
 function Get-EstadoSeguridad($esAdmin) {
     $nombresRed = @{ Domain = 'dominio'; Private = 'privada'; Public = 'publica' }
@@ -161,7 +203,8 @@ function Get-EstadoRespaldo($esAdmin) {
 
 # Datos de salud del equipo. Lo que requiere administrador queda en $null si no lo es.
 # Deja el detalle en el log (lo que no cabe en el resumen: titulos de actualizaciones, etc.)
-function Get-SaludEquipo($discoC, $esAdmin) {
+# $wu: resultado de Get-EstadoWindowsUpdate ya consultado en segundo plano; sin el, se consulta aqui.
+function Get-SaludEquipo($discoC, $esAdmin, $wu = $null) {
     # Bateria (solo portatiles): capacidad actual frente a la de fabrica, segun el informe de Windows
     $bateria = $null
     if (Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue) {
@@ -214,8 +257,12 @@ function Get-SaludEquipo($discoC, $esAdmin) {
 
     $version = Get-VersionWindows
     if ($version) { Log "  $($version.Nombre), compilacion $($version.Compilacion)" DarkGray }
-    Log "  consultando Windows Update (solo consulta, no instala nada)..."
-    $wu = Get-EstadoWindowsUpdate
+    if ($wu) {
+        Log "  Windows Update: consultado en segundo plano mientras corrian los pasos anteriores (solo consulta)" DarkGray
+    } else {
+        Log "  consultando Windows Update (solo consulta, no instala nada)..."
+        $wu = Get-EstadoWindowsUpdate
+    }
     if ($wu.Error) {
         Log "  no se pudo consultar Windows Update: $($wu.Error)" DarkYellow
     } else {
@@ -231,6 +278,12 @@ function Get-SaludEquipo($discoC, $esAdmin) {
         Log "  errores de hardware (WHEA) en 30 dias: $($hardware.Graves) grave(s), $($hardware.Corregidos) corregido(s)" DarkYellow
     }
 
+    $dispositivos = Get-DispositivosConProblema
+    if ($null -eq $dispositivos) { Log "  no se pudo leer la lista de dispositivos" DarkYellow }
+    foreach ($d in $dispositivos) {
+        Log "  dispositivo con problema: $($d.Nombre) (codigo $($d.Codigo): $(Get-TextoProblemaDispositivo $d.Codigo); clase $($d.Clase); $($d.Id))" DarkYellow
+    }
+
     [pscustomobject]@{
         Bateria           = $bateria
         Fiabilidad        = if ($esAdmin) { $discoC | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue } else { $null }
@@ -240,6 +293,7 @@ function Get-SaludEquipo($discoC, $esAdmin) {
         WindowsUpdate     = $wu
         Cuelgues          = Get-CuelguesRecientes 30
         Hardware          = $hardware
+        Dispositivos      = $dispositivos
         Defender          = Get-EstadoDefender
         Seguridad         = Get-EstadoSeguridad $esAdmin
         Respaldo          = Get-EstadoRespaldo $esAdmin
