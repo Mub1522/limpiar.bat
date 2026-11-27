@@ -259,6 +259,10 @@ Si el resumen muestra "Sistema de archivos" con un error pendiente, o "TRIM del 
 - **"Liberar RAM"**: Windows usa la RAM libre como cache a proposito; vaciarla hace que todo cargue mas lento despues.
 - **Borrar `C:\Windows\Installer`**, la cache de miniaturas o instantaneas que no son puntos de restauracion: o es peligroso o libera muy poco.
 - **Desactivar programas de inicio**: solo se informan en el resumen; tu decides cuales quitar.
+- **Borrar `Prefetch`**: Windows lo usa para abrir rapido los programas; borrarlo hace el arranque mas lento.
+- **`ipconfig /flushdns`**: no hace dano, pero tampoco mejora nada.
+- **`DISM /ResetBase`**: despues no se pueden desinstalar las actualizaciones ya instaladas. La limpieza profunda (paso 9) usa solo `/StartComponentCleanup`.
+- **Desactivar la telemetria, cambiar los efectos visuales, Compact OS o mover el archivo de paginacion**: cambian la configuracion de Windows por una ganancia minima o nula.
 - **Borrar `node_modules` o cambiar la hibernacion**: solo se informan en el resumen. Un `node_modules` viejo puede ser de un proyecto que todavia usas sin editarlo, y la hibernacion la decides tu.
 - **Vaciar la papelera entera**: lo reciente puede ser algo que borraste por error y todavia quieres recuperar. Solo se ofrece borrar lo de mas de 30 dias, y solo de tu cuenta.
 
@@ -293,6 +297,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-27** - "Lo que no hace" suma los "trucos" populares que no ayudan o hacen dano (borrar `Prefetch`, `flushdns`, `DISM /ResetBase`, telemetria, efectos visuales, Compact OS, archivo de paginacion), y las pruebas automaticas fallan si alguno aparece en el codigo, igual que con limpiar el registro o liberar RAM. El script no cambia.
 - **2026-11-27** - Mas limpieza para desarrollo y mas datos en el resumen:
   - Paso 4: versiones viejas de extensiones de VS Code que el propio VS Code marco para borrar (con VS Code cerrado).
   - Paso 6: pregunta para borrar los navegadores de Playwright que ya no usa ningun proyecto; y busqueda (solo informa) de `node_modules` de proyectos sin cambios en 90 dias.

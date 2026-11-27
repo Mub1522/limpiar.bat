@@ -63,6 +63,10 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 - **Cerrar VS Code.** Puede haber archivos sin guardar.
 - **Tocar historial, cookies, contraseñas o sesiones** de navegadores y apps.
 - **Borrar la carpeta del almacén de pnpm o la caché de Yarn 2+.** Los proyectos dependen de ellas.
+- **Borrar `Prefetch`.** Windows lo usa para abrir rápido los programas: sin él, el arranque y las apps cargan más lento hasta que se regenera.
+- **`ipconfig /flushdns`.** No hace daño, pero tampoco mejora nada: no se agrega algo que solo parece útil.
+- **`DISM /ResetBase`.** Después no se pueden desinstalar las actualizaciones ya instaladas; el paso 9 usa solo `/StartComponentCleanup`.
+- **Desactivar la telemetría, cambiar los efectos visuales, Compact OS o tocar el archivo de paginación.** Cambian la configuración de Windows por una ganancia mínima o nula, y son decisiones del usuario.
 - **Borrar `node_modules` o cambiar la hibernación (`powercfg /h`).** Solo se informan: un proyecto sin cambios puede seguir en uso, y la hibernación es una decisión del usuario.
 - **Borrar versiones de Puppeteer.** No registra qué versión usa cada proyecto (Playwright sí, con `.links`), así que no se sabe cuál se puede borrar sin romper uno.
 - **Vaciar la papelera entera (`Clear-RecycleBin`) o la de otra cuenta.** Lo reciente puede ser un borrado por error que el usuario todavía quiere recuperar, y la papelera de otra cuenta es de esa persona. El paso 1 solo borra, con pregunta, lo de más de `$diasPapelera` días de la cuenta actual.

@@ -41,7 +41,18 @@ Describe 'Lo que el script no hace (CLAUDE.md 2.2)' {
         @{ Patron = 'Remove-Item[^\r\n]*(Windows\.old|WINDOWS\.~)'; Motivo = 'los restos de actualizacion solo los borra el Liberador de espacio' },
         @{ Patron = 'Clear-RecycleBin|SHEmptyRecycleBin'; Motivo = 'vacian la papelera entera: solo se borra lo de mas de $diasPapelera dias' },
         @{ Patron = 'Remove-Item[^\r\n]*node_modules'; Motivo = 'los node_modules viejos solo se informan: decide el usuario' },
-        @{ Patron = '&\s*powercfg(\.exe)?[^\r\n]*\s[/-]h(ibernate)?\b'; Motivo = 'la hibernacion solo se informa: el script no cambia la configuracion de energia' }
+        @{ Patron = '&\s*powercfg(\.exe)?[^\r\n]*\s[/-]h(ibernate)?\b'; Motivo = 'la hibernacion solo se informa: el script no cambia la configuracion de energia' },
+        # "Trucos" populares descartados (CLAUDE.md 2.2)
+        @{ Patron = 'Prefetch';                    Motivo = 'Windows lo usa para abrir rapido los programas: borrarlo hace el arranque mas lento' },
+        @{ Patron = 'flushdns';                    Motivo = 'vaciar la cache DNS no mejora nada' },
+        @{ Patron = 'ResetBase';                   Motivo = 'impide desinstalar las actualizaciones ya instaladas' },
+        @{ Patron = 'Remove-Item[^\r\n]*\bHK(LM|CU|U|CR|CC):|\breg(\.exe)?\s+delete\b'; Motivo = 'no se limpia el registro' },
+        @{ Patron = 'EmptyWorkingSet|EmptyStandbyList|SetProcessWorkingSetSize|ClearStandbyList'; Motivo = 'liberar RAM hace que todo cargue mas lento' },
+        @{ Patron = '\bsc(\.exe)?\s+(config|stop|delete)\b'; Motivo = 'no se desactivan servicios (tampoco con sc.exe)' },
+        @{ Patron = 'DiagTrack|AllowTelemetry|dmwappushservice'; Motivo = 'no se toca la telemetria: es configuracion de Windows y la decide el usuario' },
+        @{ Patron = 'VisualFXSetting|UserPreferencesMask'; Motivo = 'no se cambian los efectos visuales' },
+        @{ Patron = 'compactos';                   Motivo = 'Compact OS cambia como se guarda Windows por una ganancia minima' },
+        @{ Patron = 'PagingFiles|Win32_PageFileSetting|AutomaticManagedPagefile'; Motivo = 'no se toca el archivo de paginacion' }
     )
     foreach ($p in $prohibidos) {
         It "no usa /$($p.Patron)/: $($p.Motivo)" {
