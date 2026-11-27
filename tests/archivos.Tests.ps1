@@ -10,6 +10,32 @@ function New-ArchivoPrueba($ruta, $bytes, $horasAtras = 0) {
     (Get-Item $ruta).LastWriteTime = (Get-Date).AddHours(-$horasAtras)
 }
 
+Describe 'Get-ContenidoRecursivo (reemplaza a Get-ChildItem -Recurse, CLAUDE.md 6.1)' {
+    New-ArchivoPrueba "$TestDrive\rec\n0.bin" 1
+    New-ArchivoPrueba "$TestDrive\rec\a\n1.bin" 1
+    New-ArchivoPrueba "$TestDrive\rec\a\b\n2.bin" 1
+    New-ArchivoPrueba "$TestDrive\fuera\ajeno.bin" 1
+    cmd /c mklink /J "$TestDrive\rec\enlace" "$TestDrive\fuera" | Out-Null
+
+    It 'devuelve archivos y carpetas de todos los niveles' {
+        $nombres = @(Get-ContenidoRecursivo "$TestDrive\rec" | ForEach-Object Name)
+        foreach ($n in 'n0.bin', 'a', 'n1.bin', 'b', 'n2.bin') { $nombres -contains $n | Should Be $true }
+    }
+    It 'no entra en enlaces (junctions), igual que Get-ChildItem -Recurse' {
+        $nombres = @(Get-ContenidoRecursivo "$TestDrive\rec" | ForEach-Object Name)
+        $nombres -contains 'enlace' | Should Be $true
+        $nombres -contains 'ajeno.bin' | Should Be $false
+    }
+    It 'con -Profundidad baja solo esos niveles (como -Depth)' {
+        $nombres = @(Get-ContenidoRecursivo "$TestDrive\rec" -Profundidad 1 | ForEach-Object Name)
+        $nombres -contains 'n1.bin' | Should Be $true
+        $nombres -contains 'n2.bin' | Should Be $false
+    }
+    It 'no devuelve nada ni falla si la carpeta no existe' {
+        @(Get-ContenidoRecursivo "$TestDrive\no-existe").Count | Should Be 0
+    }
+}
+
 Describe 'Get-FolderSize' {
     It 'suma los archivos de todas las subcarpetas' {
         New-ArchivoPrueba "$TestDrive\tam\a.bin" 1000

@@ -23,6 +23,21 @@ Describe 'ConvertFrom-ResultadoWinget (paso 16)' {
     }
 }
 
+Describe 'ConvertFrom-SalidaTrim (paso 14)' {
+    It 'quita el progreso en ingles y en espanol y parte el informe final en lineas' {
+        $mensajes = @(
+            'Invoking retrim on Windows (C:)...', 'Retrim:  0% complete...', 'Retrim:  41% complete...',
+            'Retrim:  100% complete.', 'Retrim:  52% completado...', '',
+            "Post Defragmentation Report:`r`n`tVolume Information:`r`n`t`tFree space = 207.33 GB"
+        )
+        $r = @(ConvertFrom-SalidaTrim $mensajes)
+        $r.Count | Should Be 4
+        $r[0] | Should Be 'Invoking retrim on Windows (C:)...'
+        $r[1] | Should Be 'Post Defragmentation Report:'
+        $r[3] | Should Be '    Free space = 207.33 GB'
+    }
+}
+
 Describe 'ConvertFrom-TablaWinget (paso 16)' {
     It 'lee la tabla en ingles, con nombres que empiezan con numero y versiones con espacio' {
         $r = ConvertFrom-TablaWinget (Get-Muestra 'winget-upgrade-en.txt') 0
