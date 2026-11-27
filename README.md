@@ -119,7 +119,7 @@ Se responde con `S`/`si` o `N`/`no` (mayusculas o minusculas). **Enter sin escri
 
 ### Limpieza
 
-1. **Temporales del usuario** (`%TEMP%`): solo lo que no se modifico en las ultimas 24 h. Y, si respondiste S, **lo viejo de la papelera de reciclaje**: solo lo que borraste hace mas de 30 dias (lo mismo que hace el Sensor de almacenamiento de Windows), en todas las unidades, y solo de tu cuenta (la papelera de otra cuenta del equipo no se toca). La fecha es la del borrado, no la del archivo
+1. **Temporales del usuario** (`%TEMP%`): solo lo que no se modifico en las ultimas 24 h. Y, si respondiste S, **lo viejo de la papelera de reciclaje**: solo lo que borraste hace mas de 30 dias (lo mismo que hace el Sensor de almacenamiento de Windows), en todas las unidades, y solo de tu cuenta (la papelera de otra cuenta del equipo no se toca). La fecha es la del borrado, no la del archivo. Las fichas de la papelera que ya no tienen su archivo (el Explorador no las muestra) se quitan sin preguntar: no liberan ni pierden nada
 2. **Temporales de Windows** (`C:\Windows\Temp`): igual, solo lo de mas de 24 h
 
    En las carpetas temporales hay archivos de programas que estan trabajando en ese momento (instaladores, Docker, etc.) y que no siempre estan bloqueados; borrarlos puede romper esos programas. Por eso se conserva lo reciente, igual que hace la Liberacion de espacio de Windows. Una carpeta se conserva si cualquier archivo dentro de ella es reciente.
@@ -297,6 +297,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-27** - Tras revisar la primera ejecucion con las mejoras nuevas: las fichas de la papelera sin su archivo (de mas de 30 dias) se quitan sin preguntar, en vez de aparecer en el log de cada ejecucion sin llegar nunca a la pregunta. En "Lo que mas retraso el arranque", el tipo (programa, driver o servicio) pasa al final de la linea, para que los nombres largos no descuadren el resumen.
 - **2026-11-27** - "Lo que no hace" suma los "trucos" populares que no ayudan o hacen dano (borrar `Prefetch`, `flushdns`, `DISM /ResetBase`, telemetria, efectos visuales, Compact OS, archivo de paginacion), y las pruebas automaticas fallan si alguno aparece en el codigo, igual que con limpiar el registro o liberar RAM. El script no cambia.
 - **2026-11-27** - Mas limpieza para desarrollo y mas datos en el resumen:
   - Paso 4: versiones viejas de extensiones de VS Code que el propio VS Code marco para borrar (con VS Code cerrado).

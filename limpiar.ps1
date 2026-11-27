@@ -644,6 +644,7 @@ function Get-PapeleraVieja($carpetas, $dias) {
                 Bytes     = if ($existe) { [double][math]::Max(0, $info.Bytes) } else { [double]0 }
                 Ficha     = $ficha.FullName
                 Contenido = $contenido
+                SinContenido = -not $existe
             }
         }
     }) | Sort-Object Bytes -Descending
@@ -761,6 +762,10 @@ foreach ($app in $appsChat) {
 $restosActualizacion = @(Get-RestosActualizacion)
 # Papelera: lo que lleva ahi mas de $diasPapelera dias (lo mismo que borra el Sensor de almacenamiento de Windows)
 $papeleraVieja = @(Get-PapeleraVieja @(Get-CarpetasPapelera) $diasPapelera)
+# Fichas sin su archivo: el Explorador no las muestra, y quitarlas no libera ni pierde nada. Se quitan sin
+# preguntar en el paso 1; si no, salian en cada log sin llegar nunca a la pregunta (27/11/2026: 3 de 0 MB)
+$papeleraHuerfana = @($papeleraVieja | Where-Object SinContenido)
+$papeleraVieja = @($papeleraVieja | Where-Object { -not $_.SinContenido })
 $bytesPapelera = [double]($papeleraVieja | Measure-Object Bytes -Sum).Sum
 # Navegadores de Playwright que ya no usa ningun proyecto (respeta PLAYWRIGHT_BROWSERS_PATH si se cambio)
 $carpetaPlaywright = if ($env:PLAYWRIGHT_BROWSERS_PATH -and $env:PLAYWRIGHT_BROWSERS_PATH -ne '0') { $env:PLAYWRIGHT_BROWSERS_PATH } else { "$env:LOCALAPPDATA\ms-playwright" }
@@ -919,6 +924,10 @@ $trabajoWinget = Start-ConsultaWinget
 # --- Paso 1: archivos temporales del usuario y lo viejo de la papelera ---
 Start-Paso 1 "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h, y papelera de reciclaje"
 $total += Clear-Folder $env:TEMP -HorasMinimas $horasTemporales
+if ($papeleraHuerfana) {
+    Log "  papelera: $($papeleraHuerfana.Count) ficha(s) sin su archivo (el Explorador no las muestra; no libera ni pierde nada)"
+    Remove-ElementosPapelera $papeleraHuerfana | Out-Null
+}
 if ($borrarPapelera) {
     Log "  papelera: lo borrado hace mas de $diasPapelera dias..."
     $total += Remove-ElementosPapelera $papeleraVieja

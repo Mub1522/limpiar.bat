@@ -239,6 +239,8 @@ Describe 'Papelera (paso 1)' {
         $huerfanas = @(Get-PapeleraVieja @("$TestDrive\huerfana") 30)
         $huerfanas.Count | Should Be 1
         $huerfanas[0].Bytes | Should Be 0
+        $huerfanas[0].SinContenido | Should Be $true
+        @(Get-PapeleraVieja @($pap) 30 | Where-Object SinContenido).Count | Should Be 0
         Remove-ElementosPapelera $huerfanas | Should Be 0
         Test-Path -LiteralPath "$TestDrive\huerfana\`$IDDD444.txt" | Should Be $false
     }

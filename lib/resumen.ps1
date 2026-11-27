@@ -495,7 +495,8 @@ function Show-Resumen($d) {
     $retrasos = @($salud.RetrasosArranque | Where-Object { $_.Segundos -ge 2 } | Select-Object -First 3)
     if ($retrasos) {
         Write-Nota 'Lo que mas retraso el arranque en 30 dias (segun Windows):' Gray
-        foreach ($r in $retrasos) { Write-Dato "$($r.Nombre) ($($r.Tipo))" ('+{0:N0} s en {1} arranque(s)' -f $r.Segundos, $r.Veces) White }
+        # El tipo va en el valor: en la etiqueta, con un nombre largo se perdia la alineacion (27/11/2026)
+        foreach ($r in $retrasos) { Write-Dato $r.Nombre ('+{0:N0} s en {1} arranque(s), {2}' -f $r.Segundos, $r.Veces, $r.Tipo) White }
     }
     Write-Nota 'Para desactivar: Administrador de tareas (Ctrl+Shift+Esc) > Aplicaciones de arranque'
 
