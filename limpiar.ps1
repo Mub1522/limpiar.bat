@@ -95,8 +95,28 @@ function Receive-TrabajoConLimite($trabajo, $segundos) {
 }
 
 
+# Recorre una carpeta y todo lo que tiene dentro (archivos y subcarpetas), sin seguir enlaces.
+# Reemplaza a Get-ChildItem -Recurse: en PS 5.1, si una subcarpeta desaparece mientras la recorre
+# (en %TEMP% pasa todo el tiempo), lanza Win32Exception "The system cannot find the file specified"
+# aunque tenga -ErrorAction SilentlyContinue, y el error rojo queda en pantalla y en el log.
+# Aqui cada carpeta se lista por separado, y una que ya no existe es un error comun que se ignora.
+function Get-ContenidoRecursivo($path, [int]$Profundidad = [int]::MaxValue) {
+    $pendientes = New-Object System.Collections.Generic.Stack[object]
+    $pendientes.Push(@($path, 0))
+    while ($pendientes.Count -gt 0) {
+        $carpeta, $nivel = $pendientes.Pop()
+        foreach ($item in Get-ChildItem -LiteralPath $carpeta -Force -ErrorAction SilentlyContinue) {
+            $item
+            $esEnlace = $item.Attributes -band [IO.FileAttributes]::ReparsePoint
+            if ($item.PSIsContainer -and -not $esEnlace -and $nivel -lt $Profundidad) {
+                $pendientes.Push(@($item.FullName, ($nivel + 1)))
+            }
+        }
+    }
+}
+
 function Get-FolderSize($path) {
-    (Get-ChildItem $path -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+    (Get-ContenidoRecursivo $path | Where-Object { -not $_.PSIsContainer } | Measure-Object Length -Sum).Sum
 }
 
 # Indica si un archivo o carpeta se uso despues de $limite (en una carpeta mira todo su contenido;
@@ -104,8 +124,8 @@ function Get-FolderSize($path) {
 function Test-Reciente($item, $limite) {
     if ($item.LastWriteTime -gt $limite) { return $true }
     if (-not $item.PSIsContainer) { return $false }
-    $reciente = Get-ChildItem $item.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -gt $limite } | Select-Object -First 1
+    $reciente = Get-ContenidoRecursivo $item.FullName |
+        Where-Object { -not $_.PSIsContainer -and $_.LastWriteTime -gt $limite } | Select-Object -First 1
     return [bool]$reciente
 }
 
@@ -163,6 +183,18 @@ function Invoke-Herramienta($exe, $argumentos, [switch]$Unicode) {
         [Console]::OutputEncoding = $encAnterior
     }
     return $LASTEXITCODE
+}
+
+# Lineas de Optimize-Volume -ReTrim -Verbose que van al log: sin las de progreso ("NN% completado",
+# "NN% complete..." segun el idioma de Windows) ni las vacias. El informe final llega en un solo
+# mensaje con saltos de linea y tabuladores: se parte para que cada linea lleve su hora.
+function ConvertFrom-SalidaTrim($mensajes) {
+    foreach ($m in $mensajes) {
+        foreach ($linea in "$m" -split "`r?`n") {
+            $linea = ($linea -replace "`t", '  ').TrimEnd()
+            if ($linea.Trim() -and $linea -notmatch '\d+\s*%') { $linea }
+        }
+    }
 }
 
 # Indica si un programa de inicio esta habilitado (el Administrador de tareas
@@ -239,8 +271,8 @@ function Stop-Programa($proceso, $nombre) {
 # hecha con Electron o WebView2. Solo esas: nunca sesiones, mensajes ni configuracion.
 function Get-CarpetasCache($raiz) {
     $encontradas = @()
-    $candidatas = Get-ChildItem $raiz -Directory -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -cin 'Cache', 'Code Cache', 'GPUCache' } | Sort-Object { $_.FullName.Length }
+    $candidatas = Get-ContenidoRecursivo $raiz -Profundidad 4 |
+        Where-Object { $_.PSIsContainer -and $_.Name -cin 'Cache', 'Code Cache', 'GPUCache' } | Sort-Object { $_.FullName.Length }
     foreach ($d in $candidatas) {
         # Si ya esta dentro de otra carpeta de cache encontrada, esa la incluye
         if ($encontradas | Where-Object { $d.FullName.StartsWith("$_\") }) { continue }
@@ -1462,20 +1494,15 @@ if ($hacerCompactar) {
 Start-Paso 14 "Paso 14: optimizacion (TRIM) del SSD"
 $discoC = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
 if ($discoC.MediaType -eq 'SSD') {
-    # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
-    # solo mensaje con saltos de linea y tabuladores: se parte para que cada linea lleve su hora.
     $inicioTrim = Get-Date
-    Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue -ErrorVariable errTrim 4>&1 |
-        ForEach-Object { "$_" -split "`r?`n" } |
-        ForEach-Object { ($_ -replace "`t", '  ').TrimEnd() } |
-        Where-Object { $_.Trim() -and $_ -notmatch '\d+% completado' } |
-        ForEach-Object { Log "  $_" DarkGray }
+    $salidaTrim = Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue -ErrorVariable errTrim 4>&1
+    ConvertFrom-SalidaTrim $salidaTrim | ForEach-Object { Log "  $_" DarkGray }
     if ($errTrim) {
         # El error solo dice "Failed"; el motivo esta en el evento 264 del optimizador (Application).
         # Caso real del 25/11/2026: "El bit de integridad esta establecido en este volumen" (0x89000015),
         # porque C: tenia una reparacion pendiente que chkdsk no podia hacer
         $evTrim = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Microsoft-Windows-Defrag'; Id = 264; StartTime = $inicioTrim.AddSeconds(-5) } -MaxEvents 1 -ErrorAction SilentlyContinue
-        $trimError = if ($evTrim) { ($evTrim.Message -split ' debido a: ', 2)[-1].Trim() } else { "$($errTrim[0].Exception.Message)".Trim() }
+        $trimError = if ($evTrim) { ($evTrim.Message -split ' (?:debido a|due to): ', 2)[-1].Trim() } else { "$($errTrim[0].Exception.Message)".Trim() }
         Log "  el TRIM no se pudo hacer: $trimError" DarkYellow
     } else {
         Log "  TRIM terminado" Green

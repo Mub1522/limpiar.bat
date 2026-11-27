@@ -297,6 +297,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-27** - Ya no sale el error rojo "Get-ChildItem : The system cannot find the file specified" al medir carpetas (se vio en el paso 1). Pasaba cuando un programa borraba una carpeta temporal justo mientras el script la recorria; ahora esa carpeta simplemente se salta. En un Windows en ingles, el log del paso 14 (TRIM) ya no se llena con unas 40 lineas de progreso ("Retrim: NN% complete..."). La limpieza no cambia.
 - **2026-11-27** - Tras revisar la primera ejecucion con las mejoras nuevas: las fichas de la papelera sin su archivo (de mas de 30 dias) se quitan sin preguntar, en vez de aparecer en el log de cada ejecucion sin llegar nunca a la pregunta. En "Lo que mas retraso el arranque", el tipo (programa, driver o servicio) pasa al final de la linea, para que los nombres largos no descuadren el resumen.
 - **2026-11-27** - "Lo que no hace" suma los "trucos" populares que no ayudan o hacen dano (borrar `Prefetch`, `flushdns`, `DISM /ResetBase`, telemetria, efectos visuales, Compact OS, archivo de paginacion), y las pruebas automaticas fallan si alguno aparece en el codigo, igual que con limpiar el registro o liberar RAM. El script no cambia.
 - **2026-11-27** - Mas limpieza para desarrollo y mas datos en el resumen:
