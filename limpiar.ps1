@@ -1,5 +1,17 @@
 # Limpieza de Windows - se ejecuta desde limpiar.bat
 $ErrorActionPreference = 'Continue'
+# Sin permisos de administrador no se hace nada: la mayoria de los pasos los necesitan y una limpieza
+# a medias deja el resumen y el historial incompletos. Se sale antes de Start-Transcript para no
+# reemplazar el log de la ejecucion anterior. limpiar.bat ya pide el permiso (UAC).
+$esAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $esAdmin) {
+    Write-Host 'Sin permisos de administrador: no se ejecuto la limpieza.' -ForegroundColor Red
+    Write-Host 'Abrela con limpiar.bat (o el acceso directo del Escritorio) y acepta el permiso de Windows.' -ForegroundColor Gray
+    Read-Host 'Presiona Enter para cerrar' | Out-Null
+    exit 1
+}
+
 # Un solo log: cada ejecucion reemplaza al anterior
 $logFile = Join-Path $PSScriptRoot 'limpieza.log'
 Start-Transcript -Path $logFile | Out-Null
@@ -244,6 +256,124 @@ function Invoke-LiberadorEspacio($categorias, $minutosMaximo = 20) {
     return $liberado
 }
 
+# Ejecuta un programa como root dentro de una distribucion WSL y devuelve su salida (lineas de texto).
+# El codigo de salida queda en $LASTEXITCODE. LC_ALL=C deja la salida de apt en ingles (se lee igual
+# sea cual sea el idioma de la distro); DEBIAN_FRONTEND y NEEDRESTART_MODE=l evitan que apt se quede
+# esperando una respuesta.
+function Invoke-Wsl($distro, $argumentos) {
+    $encAnterior = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    try {
+        & wsl.exe -d $distro -u root --exec env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l @argumentos 2>&1 |
+            ForEach-Object { "$_" }
+    } finally {
+        [Console]::OutputEncoding = $encAnterior
+    }
+}
+
+# Distribuciones WSL que usan apt (Ubuntu, Debian...). Las de Docker Desktop no se tocan nunca.
+function Get-DistrosApt {
+    foreach ($d in Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss -ErrorAction SilentlyContinue) {
+        $nombre = (Get-ItemProperty $d.PSPath).DistributionName
+        if (-not $nombre -or $nombre -like 'docker-desktop*') { continue }
+        Invoke-Wsl $nombre @('test', '-x', '/usr/bin/apt-get') | Out-Null
+        if ($LASTEXITCODE -eq 0) { $nombre }
+    }
+}
+
+# Tamano en bytes de la cache de paquetes descargados de apt dentro de una distro (0 si no se puede leer)
+# Sin "| Select-Object -First": corta la tuberia y mata wsl.exe antes de que restaure el modo de la
+# consola, y desde ahi cada salto de linea deja de volver al inicio (texto en escalera, 26/11/2026)
+function Get-CacheApt($distro) {
+    $salida = @(Invoke-Wsl $distro @('du', '-sb', '/var/cache/apt/archives'))[0]
+    if ("$salida" -match '^(\d+)') { return [double]$Matches[1] }
+    return 0
+}
+
+# Actualiza los paquetes instalados de una distro WSL con apt y borra los paquetes descargados.
+# Solo "apt-get upgrade": no instala ni quita paquetes (eso lo hace full-upgrade, que no se usa), y
+# --force-confold conserva siempre los archivos de configuracion que se hayan modificado.
+function Update-PaquetesWsl($distro) {
+    $r = [pscustomobject]@{ Nombre = $distro; Ok = $false; Error = ''; Paquetes = @(); Retenidos = 0; CacheBytes = 0 }
+    $esperarBloqueo = @('-o', 'DPkg::Lock::Timeout=120')   # si otro apt esta trabajando, esperar hasta 2 min
+
+    Log "  ${distro}: buscando actualizaciones (apt-get update)..."
+    # --allow-releaseinfo-change-label: si un repositorio solo cambia su nombre descriptivo (paso el
+    # 25/11/2026 con el PPA de PHP, que paso a "PPA for PHP (deprecated)"), apt se detiene hasta que
+    # alguien lo acepte. Ese nombre no cambia lo que se instala, asi que se acepta. Los cambios de
+    # origen, version o codename si siguen deteniendo el paso.
+    $salida = Invoke-Wsl $distro (@('apt-get', 'update', '-q', '--allow-releaseinfo-change-label') + $esperarBloqueo)
+    $codigo = $LASTEXITCODE
+    $salida | Where-Object { $_ -match '^(E|W|N): ' } | ForEach-Object { Log "    $_" DarkYellow }
+    if ($codigo -ne 0) {
+        # Sin update no se actualiza nada, pero la cache de apt se borra igual (al final, sin riesgo)
+        $ultimoError = $salida | Where-Object { $_ -match '^E: ' } | Select-Object -Last 1
+        $r.Error = "apt-get update fallo (codigo $codigo)$(if ($ultimoError) { ": $ultimoError" })"
+        Log "    $($r.Error)" Red
+    } else {
+        Update-PaquetesAptInstalados $distro $r $esperarBloqueo
+    }
+
+    # Paquetes .deb descargados: ya no hacen falta. Lo liberado queda dentro del disco virtual de la
+    # distro y vuelve a Windows al compactar (paso 13)
+    $cacheAntes = Get-CacheApt $distro
+    Invoke-Wsl $distro @('apt-get', 'clean') | Out-Null
+    $r.CacheBytes = [math]::Max([double]0, $cacheAntes - (Get-CacheApt $distro))
+    Log ("    cache de apt: {0:N2} MB borrados (apt-get clean)" -f ($r.CacheBytes / 1MB)) DarkGray
+    return $r
+}
+
+# Lee la salida de "apt-get -s upgrade" (simulacion): lineas "Inst paquete [version actual] (version nueva ...)"
+# y el total "... and N not upgraded.". Devuelve Paquetes (Nombre, Instalada, Disponible) y Retenidos.
+# Separada de la llamada a WSL para poder probarla con salidas reales guardadas (tests\).
+function ConvertFrom-SimulacionApt($lineas) {
+    $paquetes = @(foreach ($l in $lineas) {
+        if ($l -match '^Inst (\S+) \[([^\]]+)\] \((\S+)') {
+            [pscustomobject]@{ Nombre = $Matches[1]; Instalada = $Matches[2]; Disponible = $Matches[3] }
+        }
+    })
+    $retenidos = 0
+    $lineaTotal = $lineas | Where-Object { $_ -match 'and (\d+) not upgraded' } | Select-Object -Last 1
+    if ($lineaTotal -match 'and (\d+) not upgraded') { $retenidos = [int]$Matches[1] }
+    return [pscustomobject]@{ Paquetes = $paquetes; Retenidos = $retenidos }
+}
+
+# Parte de Update-PaquetesWsl que corre solo si apt-get update funciono: lista lo que hay para
+# actualizar, lo actualiza y anota el resultado en $r
+function Update-PaquetesAptInstalados($distro, $r, $esperarBloqueo) {
+    # Simulacion (no cambia nada) para saber que se va a actualizar
+    $simulacion = ConvertFrom-SimulacionApt (Invoke-Wsl $distro @('apt-get', '-s', 'upgrade'))
+    $paquetes = $simulacion.Paquetes
+    $r.Retenidos = $simulacion.Retenidos
+
+    if (-not $paquetes) {
+        Log "    todo al dia" Green
+        $r.Ok = $true
+    } else {
+        Log "    $($paquetes.Count) paquete(s) para actualizar:"
+        foreach ($p in $paquetes) { Log "      $($p.Nombre): $($p.Instalada) -> $($p.Disponible)" DarkGray }
+        Log "    actualizando (apt-get upgrade), puede tardar unos minutos..."
+        $salida = Invoke-Wsl $distro (@('apt-get', 'upgrade', '-y', '-q', '-o', 'Dpkg::Options::=--force-confold') + $esperarBloqueo)
+        $codigo = $LASTEXITCODE
+        # De la salida de apt solo se guardan errores, avisos y el total (el resto es ruido)
+        $salida | Where-Object { $_ -match '^(E|W): |^dpkg: |^\d+ upgraded, ' } | ForEach-Object { Log "    $_" DarkGray }
+        if ($codigo -eq 0) {
+            Log "    $($paquetes.Count) paquete(s) actualizado(s)" Green
+            $r.Ok = $true
+            $r.Paquetes = $paquetes
+        } else {
+            $ultimoError = $salida | Where-Object { $_ -match '^E: ' } | Select-Object -Last 1
+            $r.Error = "apt-get upgrade fallo (codigo $codigo)$(if ($ultimoError) { ": $ultimoError" })"
+            Log "    $($r.Error)" Red
+        }
+    }
+    if ($r.Retenidos -gt 0) {
+        # En Ubuntu suelen ser actualizaciones escalonadas (Ubuntu las libera de a poco) y llegan en otra
+        # ejecucion; si no, son paquetes que necesitan instalar o quitar otros y no se tocan
+        Log "    $($r.Retenidos) paquete(s) retenido(s) por apt: no se actualizan en esta ejecucion" DarkGray
+    }
+}
+
 # Recorta una columna de una linea de tabla sin fallar si la linea es mas corta
 function Get-Columna($linea, $desde, $hasta) {
     if ($desde -ge $linea.Length) { return '' }
@@ -262,7 +392,15 @@ function Get-AppsDesactualizadas {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     try { $salida = winget upgrade --accept-source-agreements --disable-interactivity 2>$null }
     finally { [Console]::OutputEncoding = $encAnterior }
-    $codigo = $LASTEXITCODE
+    $tabla = ConvertFrom-TablaWinget $salida $LASTEXITCODE
+    $script:estadoWinget = $tabla.Estado
+    $tabla.Apps
+}
+
+# Lee la salida de "winget upgrade" (lineas de texto) y su codigo de salida. Devuelve Estado
+# ('ok', 'al dia' o 'error (codigo N)') y Apps (Nombre, Id, Instalada, Disponible).
+# Separada de la llamada a winget para poder probarla con salidas reales guardadas (tests\).
+function ConvertFrom-TablaWinget($salida, $codigo) {
     # Quitar la animacion de carga que winget escribe con `r antes de la tabla
     $lineas = @($salida | ForEach-Object { ("$_" -split "`r")[-1] })
     $iSep = 0..($lineas.Count - 1) | Where-Object { $lineas[$_] -match '^-{10,}$' } | Select-Object -First 1
@@ -271,11 +409,10 @@ function Get-AppsDesactualizadas {
     }
     if (-not $col -or $col.Count -lt 5) {
         # Sin tabla: 0 o "No installed package found" (-1978335212) = no hay actualizaciones; otro codigo = fallo
-        $script:estadoWinget = if ($codigo -eq 0 -or $codigo -eq -1978335212) { 'al dia' } else { "error (codigo $codigo)" }
-        return
+        $estado = if ($codigo -eq 0 -or $codigo -eq -1978335212) { 'al dia' } else { "error (codigo $codigo)" }
+        return [pscustomobject]@{ Estado = $estado; Apps = @() }
     }
-    $script:estadoWinget = 'ok'
-    foreach ($l in $lineas[($iSep + 1)..($lineas.Count - 1)]) {
+    $apps = @(foreach ($l in $lineas[($iSep + 1)..($lineas.Count - 1)]) {
         # La tabla termina en la primera linea vacia o en el total ("17 upgrades available.",
         # 3 palabras; una fila de app tiene al menos 5 columnas aunque el nombre empiece con numero)
         if (-not $l.Trim() -or ($l -match '^\d+ ' -and @($l.Trim() -split '\s+').Count -le 4)) { break }
@@ -286,16 +423,16 @@ function Get-AppsDesactualizadas {
             Disponible = Get-Columna $l $col[3] $col[4]
         }
         if ($app.Id) { $app }
-    }
+    })
+    return [pscustomobject]@{ Estado = 'ok'; Apps = $apps }
 }
 
-$esAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)
 $total = 0
 $compactados = @()
-$trimError = $null   # motivo si el TRIM del paso 13 falla (va al resumen)
+$trimError = $null   # motivo si el TRIM del paso 14 falla (va al resumen)
 $dockerLiberado = 0          # bytes liberados dentro del disco virtual de Docker (paso 11)
 $imagenesDockerBorradas = @()
+$actualizacionesWsl = @()    # resultado de apt por distribucion WSL (paso 12)
 $libreInicio = (Get-PSDrive C).Free
 $maxPuntos = 2         # puntos de restauracion a conservar (se borran los mas viejos)
 $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modificar en este tiempo
@@ -321,15 +458,16 @@ $appsChat = @(
 # Inicio: encabezado y preguntas (todas al principio, para que despues corra sola)
 # ======================================================================
 Write-CajaConsola 'LIMPIEZA DE WINDOWS'
-$modo = if ($esAdmin) { 'como administrador' } else { 'SIN permisos de administrador: se hara solo una parte' }
-Write-Host "  $env:COMPUTERNAME - $(Get-Date -Format 'dd/MM/yyyy HH:mm') - $modo" -ForegroundColor DarkGray
+Write-Host "  $env:COMPUTERNAME - $(Get-Date -Format 'dd/MM/yyyy HH:mm') - como administrador" -ForegroundColor DarkGray
 
 # Datos que necesitan las preguntas
 $discosVirtuales = @(Get-DiscosVirtuales)
 $dockerInstalado = [bool](Get-Command docker -ErrorAction SilentlyContinue)
-$dockerActivo = $esAdmin -and (Test-DockerActivo)
+$dockerActivo = Test-DockerActivo
 $imagenesDockerSinUso = if ($dockerActivo) { @(Get-ImagenesDockerSinUso) } else { @() }
 $listaImagenes = ($imagenesDockerSinUso.Nombre -join ', ')
+# Distribuciones WSL con apt (consultarlas arranca cada distro unos segundos)
+$distrosApt = @(Get-DistrosApt)
 # Cache de NuGet (.NET): paquetes descargados (respeta NUGET_PACKAGES si se cambio la carpeta) y cache HTTP
 $carpetaPaquetesNuget = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { "$HOME\.nuget\packages" }
 $carpetasNuget = @($carpetaPaquetesNuget, "$env:LOCALAPPDATA\NuGet\v3-cache", "$env:LOCALAPPDATA\NuGet\plugins-cache") |
@@ -344,7 +482,7 @@ foreach ($app in $appsChat) {
     $app.Carpetas = @(Get-CarpetasCache $app.Datos)
     $app.Bytes = [double](($app.Carpetas | ForEach-Object { Get-FolderSize $_ } | Measure-Object -Sum).Sum)
 }
-$restosActualizacion = if ($esAdmin) { @(Get-RestosActualizacion) } else { @() }
+$restosActualizacion = @(Get-RestosActualizacion)
 
 # Solo se pregunta lo que aplica en este equipo y en este momento
 $preguntas = New-Object System.Collections.ArrayList
@@ -370,48 +508,66 @@ if ($bytesLogsPm2 -gt 50MB) {
     [void]$preguntas.Add(@{ Clave = 'pm2'; Titulo = 'Vaciar los logs de PM2 (Node.js)'
         Detalle = @("Ocupan $(Format-Tamano $bytesLogsPm2). Se pierde el historial de salida y errores de las apps; las apps siguen corriendo.") })
 }
-if ($esAdmin) {
-    [void]$preguntas.Add(@{ Clave = 'dism'; Titulo = 'Limpieza profunda de Windows (DISM)'
-        Detalle = @('Borra versiones viejas de componentes de Windows Update. Tarda 5-15 minutos.',
-            'Despues no se podra desinstalar las actualizaciones ya instaladas.') })
-    # Restos de una actualizacion grande: solo si ninguno es reciente (actualizacion en curso o que aun se puede deshacer)
-    $bytesRestos = ($restosActualizacion | Measure-Object Bytes -Sum).Sum
-    if ($bytesRestos -gt 100MB -and -not ($restosActualizacion | Where-Object Reciente)) {
-        $detalle = @('Archivos de la version anterior de Windows y de su instalador:')
-        $detalle += $restosActualizacion | ForEach-Object { "  - C:\$($_.Nombre) ($(Format-Tamano $_.Bytes))" }
-        $detalle += 'Despues ya no se podra volver a la version anterior de Windows. Los borra el Liberador de espacio de Windows.'
-        [void]$preguntas.Add(@{ Clave = 'restos'; Titulo = 'Borrar los restos de la ultima actualizacion grande de Windows'; Detalle = $detalle })
-    }
-    [void]$preguntas.Add(@{ Clave = 'reparacion'; Titulo = 'Revisar y reparar archivos de Windows (SFC + DISM)'
-        Detalle = @('Crea un punto de restauracion antes. Tarda 10-60 minutos.') })
-    if ($imagenesDockerSinUso) {
-        # Se muestra exactamente que se borraria; despues se borran solo esas (por nombre)
-        $bytesImagenes = ($imagenesDockerSinUso | Sort-Object Id -Unique | Measure-Object Bytes -Sum).Sum
-        $detalle = @('Imagenes que no usa ningun contenedor:')
-        $detalle += $imagenesDockerSinUso | ForEach-Object { "  - $($_.Nombre) ($(Format-Tamano $_.Bytes))" }
-        $detalle += 'Total: hasta {0:N2} GB. Si se vuelven a necesitar hay que descargarlas o reconstruirlas.' -f ($bytesImagenes / 1GB)
-        [void]$preguntas.Add(@{ Clave = 'imagenes'; Titulo = 'Borrar imagenes de Docker sin usar'; Detalle = $detalle })
-    }
-    if ($discosVirtuales) {
-        [void]$preguntas.Add(@{ Clave = 'compactar'; Titulo = 'Compactar los discos virtuales de Docker y WSL'
-            Detalle = @('Se apagan Docker y WSL mientras tanto (los contenedores en marcha se detienen).') })
-    }
-    [void]$preguntas.Add(@{ Clave = 'actualizar'; Titulo = 'Actualizar las aplicaciones desactualizadas (winget)'
-        Detalle = @('Algunas apps pueden cerrarse mientras se actualizan.') })
+[void]$preguntas.Add(@{ Clave = 'dism'; Titulo = 'Limpieza profunda de Windows (DISM)'
+    Detalle = @('Borra versiones viejas de componentes de Windows Update. Tarda 5-15 minutos.',
+        'Despues no se podra desinstalar las actualizaciones ya instaladas.') })
+# Restos de una actualizacion grande: solo si ninguno es reciente (actualizacion en curso o que aun se puede deshacer)
+$bytesRestos = ($restosActualizacion | Measure-Object Bytes -Sum).Sum
+if ($bytesRestos -gt 100MB -and -not ($restosActualizacion | Where-Object Reciente)) {
+    $detalle = @('Archivos de la version anterior de Windows y de su instalador:')
+    $detalle += $restosActualizacion | ForEach-Object { "  - C:\$($_.Nombre) ($(Format-Tamano $_.Bytes))" }
+    $detalle += 'Despues ya no se podra volver a la version anterior de Windows. Los borra el Liberador de espacio de Windows.'
+    [void]$preguntas.Add(@{ Clave = 'restos'; Titulo = 'Borrar los restos de la ultima actualizacion grande de Windows'; Detalle = $detalle })
+}
+[void]$preguntas.Add(@{ Clave = 'reparacion'; Titulo = 'Revisar y reparar archivos de Windows (SFC + DISM)'
+    Detalle = @('Crea un punto de restauracion antes. Tarda 10-60 minutos.') })
+if ($imagenesDockerSinUso) {
+    # Se muestra exactamente que se borraria; despues se borran solo esas (por nombre)
+    $bytesImagenes = ($imagenesDockerSinUso | Sort-Object Id -Unique | Measure-Object Bytes -Sum).Sum
+    $detalle = @('Imagenes que no usa ningun contenedor:')
+    $detalle += $imagenesDockerSinUso | ForEach-Object { "  - $($_.Nombre) ($(Format-Tamano $_.Bytes))" }
+    $detalle += 'Total: hasta {0:N2} GB. Si se vuelven a necesitar hay que descargarlas o reconstruirlas.' -f ($bytesImagenes / 1GB)
+    [void]$preguntas.Add(@{ Clave = 'imagenes'; Titulo = 'Borrar imagenes de Docker sin usar'; Detalle = $detalle })
+}
+if ($distrosApt) {
+    [void]$preguntas.Add(@{ Clave = 'wsl'; Titulo = 'Actualizar los paquetes de Linux en WSL (apt)'
+        Detalle = @("Distribuciones: $($distrosApt -join ', '). Necesita internet.",
+            'Solo actualiza lo que ya esta instalado: no instala ni quita paquetes y conserva tu configuracion.') })
+}
+if ($discosVirtuales) {
+    [void]$preguntas.Add(@{ Clave = 'compactar'; Titulo = 'Compactar los discos virtuales de Docker y WSL'
+        Detalle = @('Se apagan Docker y WSL mientras tanto (los contenedores en marcha se detienen).') })
+}
+[void]$preguntas.Add(@{ Clave = 'actualizar'; Titulo = 'Actualizar las aplicaciones desactualizadas (winget)'
+    Detalle = @('Algunas apps pueden cerrarse mientras se actualizan.') })
+
+# Interpreta una respuesta: 'S', 'N', 'T' (si a esta y a todas las que faltan) o $null (no valida).
+# Enter sin escribir nada no es valido: hay que elegir (lo pidio el usuario el 2026-11-26).
+# $null (Read-Host sin entrada, por ejemplo con la entrada cerrada) = N, para no preguntar para siempre.
+function ConvertFrom-RespuestaSiNo($texto) {
+    if ($null -eq $texto) { return 'N' }
+    $resp = "$texto".Trim()
+    if ($resp -match '^(s|si)$') { return 'S' }
+    if ($resp -match '^(n|no)$') { return 'N' }
+    if ($resp -match '^(t|todas?|todo)$') { return 'T' }
+    return $null
 }
 
-# Tarjeta de una pregunta S/N. Enter sin escribir nada = No; otra respuesta se vuelve a preguntar.
+# Tarjeta de una pregunta S/N/T. Otra respuesta (o Enter sin nada) se vuelve a preguntar.
+# Con -SiATodas la tarjeta se muestra igual (para que quede a la vista y en el log), pero sin preguntar.
 # La respuesta se repite en su propia linea porque lo que se escribe en Read-Host no queda en el log.
-function Read-SiNo($pregunta, $numero, $cantidad) {
+function Read-SiNo($pregunta, $numero, $cantidad, [switch]$SiATodas) {
     Write-Host ''
     Write-Host ('  [{0}/{1}] {2}' -f $numero, $cantidad, $pregunta.Titulo) -ForegroundColor White
     foreach ($linea in $pregunta.Detalle) { Write-Host "        $linea" -ForegroundColor DarkGray }
+    if ($SiATodas) { Write-Host '        -> SI (todas)' -ForegroundColor Green; return 'S' }
+    $opciones = if ($cantidad -gt 1) { '        S/N, T = si a todas' } else { '        S/N' }
     while ($true) {
-        # "$(...)": si Read-Host no devuelve nada (entrada cerrada) se toma como vacio = No, sin error
-        $resp = "$(Read-Host '        S/N (Enter = N)')".Trim()
-        if ($resp -match '^(s|si)$') { Write-Host '        -> SI' -ForegroundColor Green; return $true }
-        if ($resp -match '^(n|no)?$') { Write-Host '        -> NO' -ForegroundColor DarkGray; return $false }
-        Write-Host '        Respuesta no valida: escribe S o N' -ForegroundColor Yellow
+        $resp = ConvertFrom-RespuestaSiNo (Read-Host $opciones)
+        if ($resp -eq 'S') { Write-Host '        -> SI' -ForegroundColor Green; return 'S' }
+        if ($resp -eq 'T') { Write-Host '        -> SI (y a todas las que faltan)' -ForegroundColor Green; return 'T' }
+        if ($resp -eq 'N') { Write-Host '        -> NO' -ForegroundColor DarkGray; return 'N' }
+        Write-Host '        Respuesta no valida: escribe S, N o T' -ForegroundColor Yellow
     }
 }
 
@@ -419,8 +575,11 @@ $respuestas = @{}
 if ($preguntas.Count -gt 0) {
     Write-SeccionConsola 'ANTES DE EMPEZAR'
     Write-Host "  $($preguntas.Count) pregunta(s). Despues la limpieza sigue sola, sin pedir nada mas." -ForegroundColor Gray
+    $siATodas = $false
     for ($i = 0; $i -lt $preguntas.Count; $i++) {
-        $respuestas[$preguntas[$i].Clave] = Read-SiNo $preguntas[$i] ($i + 1) $preguntas.Count
+        $resp = Read-SiNo $preguntas[$i] ($i + 1) $preguntas.Count -SiATodas:$siATodas
+        if ($resp -eq 'T') { $siATodas = $true }
+        $respuestas[$preguntas[$i].Clave] = ($resp -ne 'N')
     }
 }
 $cerrarNav = @{}
@@ -433,6 +592,7 @@ $borrarRestos         = [bool]$respuestas['restos']
 $hacerDism            = [bool]$respuestas['dism']
 $hacerReparacion      = [bool]$respuestas['reparacion']
 $borrarImagenesDocker = [bool]$respuestas['imagenes']
+$actualizarWsl        = [bool]$respuestas['wsl']
 $hacerCompactar       = [bool]$respuestas['compactar']
 $hacerActualizar      = [bool]$respuestas['actualizar']
 $borrarNuget          = [bool]$respuestas['nuget']
@@ -440,48 +600,42 @@ $borrarLogsPm2        = [bool]$respuestas['pm2']
 
 Write-SeccionConsola 'LIMPIEZA EN CURSO'
 Log "Todo listo: puedes dejar la ventana y volver cuando aparezca el resumen." Cyan
-if ($esAdmin) {
-    # Si una ejecucion anterior se corto en medio del Liberador de espacio (paso 9), su perfil temporal quedo puesto
-    $marcasViejas = @(Remove-PerfilLiberador)
-    if ($marcasViejas) {
-        Log "Se quito el perfil temporal del Liberador de espacio que dejo una ejecucion anterior cortada ($($marcasViejas -join ', '))" DarkYellow
-    }
+# Si una ejecucion anterior se corto en medio del Liberador de espacio (paso 9), su perfil temporal quedo puesto
+$marcasViejas = @(Remove-PerfilLiberador)
+if ($marcasViejas) {
+    Log "Se quito el perfil temporal del Liberador de espacio que dejo una ejecucion anterior cortada ($($marcasViejas -join ', '))" DarkYellow
 }
 
 # --- Paso 1: archivos temporales del usuario ---
 Log "Paso 1: temporales del usuario ($env:TEMP), los de mas de $horasTemporales h" Yellow
 $total += Clear-Folder $env:TEMP -HorasMinimas $horasTemporales
 
-if ($esAdmin) {
-    # --- Paso 2: temporales de Windows ---
-    $winTemp = Join-Path $env:SystemRoot 'Temp'
-    Log "Paso 2: temporales de Windows ($winTemp), los de mas de $horasTemporales h" Yellow
-    $total += Clear-Folder $winTemp -HorasMinimas $horasTemporales
+# --- Paso 2: temporales de Windows ---
+$winTemp = Join-Path $env:SystemRoot 'Temp'
+Log "Paso 2: temporales de Windows ($winTemp), los de mas de $horasTemporales h" Yellow
+$total += Clear-Folder $winTemp -HorasMinimas $horasTemporales
 
-    # --- Paso 3: cache de descargas de Windows Update ---
-    # Hay que detener los servicios para que suelten los archivos
-    $wuCache = Join-Path $env:SystemRoot 'SoftwareDistribution\Download'
-    Log "Paso 3: cache de Windows Update ($wuCache)" Yellow
-    $servicios = 'wuauserv', 'bits'
-    foreach ($s in $servicios) {
-        Log "  deteniendo servicio $s..."
-        Stop-Service $s -Force -ErrorAction SilentlyContinue
+# --- Paso 3: cache de descargas de Windows Update ---
+# Hay que detener los servicios para que suelten los archivos
+$wuCache = Join-Path $env:SystemRoot 'SoftwareDistribution\Download'
+Log "Paso 3: cache de Windows Update ($wuCache)" Yellow
+$servicios = 'wuauserv', 'bits'
+foreach ($s in $servicios) {
+    Log "  deteniendo servicio $s..."
+    Stop-Service $s -Force -ErrorAction SilentlyContinue
+}
+$total += Clear-Folder $wuCache
+foreach ($s in $servicios) {
+    # Sin -WarningAction, PowerShell escribe "ADVERTENCIA: Esperando a que se inicie el servicio..."
+    # cada pocos segundos mientras arranca (BITS suele tardar): asusta y no dice si al final arranco.
+    # En su lugar se registra el estado final.
+    Start-Service $s -ErrorAction SilentlyContinue -ErrorVariable errServicio -WarningAction SilentlyContinue
+    $estado = (Get-Service $s -ErrorAction SilentlyContinue).Status
+    if ("$estado" -eq 'Running') { Log "  servicio $s en marcha de nuevo" }
+    else {
+        # No es grave: Windows lo vuelve a iniciar solo cuando lo necesita
+        Log "  servicio $s quedo en estado '$estado' (Windows lo inicia solo cuando lo necesita)" DarkYellow
     }
-    $total += Clear-Folder $wuCache
-    foreach ($s in $servicios) {
-        # Sin -WarningAction, PowerShell escribe "ADVERTENCIA: Esperando a que se inicie el servicio..."
-        # cada pocos segundos mientras arranca (BITS suele tardar): asusta y no dice si al final arranco.
-        # En su lugar se registra el estado final.
-        Start-Service $s -ErrorAction SilentlyContinue -ErrorVariable errServicio -WarningAction SilentlyContinue
-        $estado = (Get-Service $s -ErrorAction SilentlyContinue).Status
-        if ("$estado" -eq 'Running') { Log "  servicio $s en marcha de nuevo" }
-        else {
-            # No es grave: Windows lo vuelve a iniciar solo cuando lo necesita
-            Log "  servicio $s quedo en estado '$estado' (Windows lo inicia solo cuando lo necesita)" DarkYellow
-        }
-    }
-} else {
-    Log "Pasos 2 y 3 omitidos: no se ejecuto como administrador" Red
 }
 
 # --- Paso 4: cache de navegadores y VS Code ---
@@ -624,329 +778,337 @@ if ($borrarLogsPm2) {
     Log "  Logs de PM2 conservados ($(Format-Tamano $bytesLogsPm2))" DarkGray
 }
 
-if ($esAdmin) {
-    # --- Paso 7: logs, volcados de memoria e informes de error de Windows ---
-    Log "Paso 7: logs de Windows (CBS y DISM), volcados de memoria e informes de error" Yellow
-    $total += Clear-Folders @(
-        "$env:SystemRoot\Logs\CBS",
-        "$env:SystemRoot\Logs\DISM"
-    )
-    # Los volcados de memoria solo sirven para averiguar la causa de un pantallazo azul:
-    # si hubo uno hace poco (o no se pudo saber) se conservan
-    $cuelgues = Get-CuelguesRecientes $diasVolcados
-    if (-not $cuelgues) {
-        Log "  volcados de memoria conservados: no se pudo leer el registro de eventos para saber si hubo un pantallazo azul" DarkYellow
-    } elseif ($cuelgues.UltimoPantallazo) {
-        Log ("  volcados de memoria conservados: hubo un pantallazo azul el {0:dd/MM HH:mm} (sirven para averiguar la causa)" -f $cuelgues.UltimoPantallazo) DarkYellow
-    } else {
-        Log "  volcados de memoria (sin pantallazos azules en los ultimos $diasVolcados dias)"
-        $volcado = "$env:SystemRoot\MEMORY.DMP"
-        if (Test-Path $volcado) {
-            $bytes = (Get-Item $volcado -Force).Length
-            Remove-Item $volcado -Force -ErrorAction SilentlyContinue -ErrorVariable err
-            if ($err) { Log "  MEMORY.DMP en uso, omitido" DarkYellow }
-            else {
-                Log "  $volcado borrado ($(Format-Tamano $bytes))" Green
-                $total += [math]::Round($bytes / 1MB, 2)
-            }
-        }
-        $total += Clear-Folders @(
-            "$env:SystemRoot\Minidump",
-            "$env:SystemRoot\LiveKernelReports"
-        )
-    }
-    # Informes de error de Windows ya enviados o en cola (los mismos que borra el Liberador de espacio)
-    $total += Clear-Folders @(
-        "$env:ProgramData\Microsoft\Windows\WER\ReportArchive",
-        "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"
-    )
-
-    # --- Paso 8: cache de Delivery Optimization (comando oficial de Windows) ---
-    Log "Paso 8: cache de Delivery Optimization" Yellow
-    # Se mide por el espacio libre del disco, no por el tamano de los archivos:
-    # esta cache usa archivos "reservados" que aparentan pesar el tamano completo
-    # de la actualizacion aunque en disco ocupen mucho menos
-    $libreAntes = (Get-PSDrive C).Free
-    try {
-        # En otro proceso: la funcion escribe "Deleting..." con Write-Host, y en PS 5.1 el transcript lo
-        # registra sin hora aunque se redirija (6>$null no sirve). Asi su salida llega como texto.
-        $salidaDO = @(& powershell.exe -NoProfile -Command 'Delete-DeliveryOptimizationCache -Force -ErrorAction Stop' 2>&1)
-        # Si falla, solo la primera linea del error (lo demas es la ubicacion y la categoria del error)
-        if ($LASTEXITCODE -ne 0) { throw ("$(@($salidaDO | Where-Object { $_ -is [Management.Automation.ErrorRecord] })[0])".Trim()) }
-        $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
-        Log "  $liberado MB liberados (medido por el espacio libre del disco)" Green
-        $total += $liberado
-    } catch {
-        Log "  no se pudo vaciar: $($_.Exception.Message)" DarkYellow
-    }
-
-    # --- Paso 9 (opcional): limpieza de componentes de Windows con DISM ---
-    Log "Paso 9 (opcional): limpieza profunda de Windows (restos de actualizaciones grandes y DISM)" Yellow
-    # Liberador de espacio de Windows: restos de la actualizacion grande, si se autorizo.
-    # Sin "Device Driver Packages": en tres ejecuciones (24 y 25/11/2026) libero 0 MB y tardo mas de
-    # 1 hora (trabado), 9 minutos y 20 (cortado por el tiempo maximo)
-    $categoriasLiberador = @()
-    $queLiberador = @()
-    if ($borrarRestos) {
-        $categoriasLiberador += 'Previous Installations', 'Temporary Setup Files', 'Windows Upgrade Log Files', 'Setup Log Files'
-        $queLiberador += 'restos de la actualizacion grande'
-    }
-    if ($categoriasLiberador) {
-        Log "  Liberador de espacio de Windows ($($queLiberador -join ' y ')), puede tardar unos minutos..."
-        $total += Invoke-LiberadorEspacio $categoriasLiberador
-        if ($borrarRestos) {
-            foreach ($r in @(Get-RestosActualizacion)) {
-                Log "  quedo C:\$($r.Nombre) ($(Format-Tamano $r.Bytes)): el Liberador no lo borro" DarkYellow
-            }
-        }
-    }
-    if (-not $borrarRestos -and $restosActualizacion) {
-        if ($restosActualizacion | Where-Object Reciente) {
-            Log "  restos de actualizaciones conservados: tienen menos de $diasRestosActualizacion dias (actualizacion en curso, o aun se puede volver atras)" DarkGray
-        } else {
-            Log "  restos de actualizaciones conservados ($(Format-Tamano $bytesRestos))" DarkGray
-        }
-    }
-    if ($hacerDism) {
-        $libreAntes = (Get-PSDrive C).Free
-        Log "  ejecutando DISM, no cierres esta ventana..."
-        $codigo = Invoke-Herramienta dism.exe @('/Online', '/Cleanup-Image', '/StartComponentCleanup')
-        if ($codigo -eq 0) {
-            # DISM no informa cuanto borra: se mide por el espacio libre del disco
-            $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
-            Log "  DISM terminado: $liberado MB liberados" Green
-            $total += $liberado
-        } else {
-            Log "  DISM termino con error (codigo $codigo)" Red
-            # 0x800f0806: hay actualizaciones esperando un reinicio
-            if ($codigo -eq -2146498554) {
-                Log "  Windows tiene operaciones pendientes: reinicia el equipo y vuelve a ejecutar la limpieza" Yellow
-            }
-        }
-    } else {
-        Log "  limpieza con DISM omitida" DarkYellow
-    }
-
-    # --- Paso 10 (opcional): revisar y reparar archivos de Windows ---
-    Log "Paso 10 (opcional): reparacion del sistema" Yellow
-    if ($hacerReparacion) {
-        # Punto de restauracion por si algo sale mal
-        Log "  creando punto de restauracion..."
-        $ultimoAntes = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber | Select-Object -Last 1
-        Checkpoint-Computer -Description 'Limpieza Windows' -RestorePointType MODIFY_SETTINGS `
-            -ErrorAction SilentlyContinue -ErrorVariable errRP -WarningAction SilentlyContinue
-        $ultimo = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber | Select-Object -Last 1
-        $fechaUltimo = if ($ultimo) { $ultimo.ConvertToDateTime($ultimo.CreationTime) }
-        if ($errRP) {
-            Log "  no se pudo crear: $($errRP[0].Exception.Message)" DarkYellow
-            Log "  (suele ser porque la Proteccion del sistema esta desactivada en C:)" DarkYellow
-        } elseif ($ultimo -and $ultimo.SequenceNumber -ne $ultimoAntes.SequenceNumber) {
-            Log "  punto de restauracion creado" Green
-        } elseif ($fechaUltimo -and $fechaUltimo -gt (Get-Date).AddHours(-24)) {
-            # Windows solo permite uno cada 24 horas; se usa el mas reciente
-            Log "  ya hay uno de las ultimas 24 h, se usa ese: $fechaUltimo" Green
-        } else {
-            Log "  Windows no creo el punto de restauracion (sin mensaje de error); la reparacion sigue sin el" DarkYellow
-        }
-
-        Log "  DISM: reparando la imagen de Windows (puede quedarse un rato en el mismo %)..."
-        $codigo = Invoke-Herramienta dism.exe @('/Online', '/Cleanup-Image', '/RestoreHealth')
-        if ($codigo -eq 0) { Log "  DISM RestoreHealth terminado" Green }
-        else { Log "  DISM RestoreHealth termino con error (codigo $codigo)" Red }
-
-        Log "  SFC: revisando archivos del sistema..."
-        Invoke-Herramienta sfc.exe @('/scannow') -Unicode | Out-Null
-        Log "  SFC terminado (el resultado esta en las lineas de arriba)" Green
-    } else {
-        Log "  reparacion omitida" DarkYellow
-    }
-
-    # --- Paso 11: limpieza de Docker ---
-    # Va antes de compactar: lo que borra Docker queda libre dentro de su disco virtual,
-    # y solo vuelve a Windows cuando ese disco se compacta (paso 12)
-    Log "Paso 11: limpieza de Docker" Yellow
-    if (-not $dockerInstalado) {
-        Log "  Docker no esta instalado: se omite" DarkGray
-    } elseif (-not $dockerActivo) {
-        Log "  Docker no esta en marcha (Docker Desktop cerrado): se omite" DarkYellow
-    } else {
-        # Sin riesgo: nada de esto lo usa ningun contenedor ni contiene datos (los volumenes no se tocan nunca)
-        $limpiezasDocker = @(
-            @{ Texto = 'contenedores detenidos'; Argumentos = @('container', 'prune', '-f') },
-            @{ Texto = 'imagenes huerfanas';     Argumentos = @('image', 'prune', '-f') },
-            @{ Texto = 'cache de compilacion';   Argumentos = @('builder', 'prune', '-f') },
-            @{ Texto = 'redes sin usar';         Argumentos = @('network', 'prune', '-f') }
-        )
-        foreach ($l in $limpiezasDocker) {
-            $salida = & docker @($l.Argumentos) 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Log "  $($l.Texto): error (codigo $LASTEXITCODE): $(($salida | Select-Object -Last 1))" Red
-                continue
-            }
-            # Docker informa lo recuperado en una linea "Total reclaimed space: X" o "Total: X"
-            $lineaTotal = $salida | Where-Object { "$_" -match '^Total' } | Select-Object -Last 1
-            if ($lineaTotal) {
-                $bytes = ConvertFrom-TamanoDocker $lineaTotal
-                $dockerLiberado += $bytes
-                Log ("  {0}: {1:N2} MB" -f $l.Texto, ($bytes / 1MB))
-            } else {
-                Log "  $($l.Texto): nada que borrar"
-            }
-        }
-
-        # Imagenes sin usar: solo si se autorizo, y solo las que se listaron en la pregunta
-        if ($borrarImagenesDocker) {
-            foreach ($img in $imagenesDockerSinUso) {
-                $salida = & docker rmi $img.Nombre 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Log ("  imagen borrada: {0} ({1:N2} MB)" -f $img.Nombre, ($img.Bytes / 1MB))
-                    $imagenesDockerBorradas += $img
-                } else {
-                    # Por ejemplo, si se empezo a usar despues de la pregunta
-                    Log "  no se pudo borrar la imagen $($img.Nombre): $(($salida | Select-Object -Last 1))" DarkYellow
-                }
-            }
-            # Las capas compartidas entre imagenes se cuentan una vez por Id; es un maximo aproximado
-            $dockerLiberado += ($imagenesDockerBorradas | Sort-Object Id -Unique | Measure-Object Bytes -Sum).Sum
-        } elseif ($imagenesDockerSinUso) {
-            Log "  imagenes sin usar conservadas: $listaImagenes" DarkGray
-        }
-
-        Log ("  Docker: {0:N2} MB liberados dentro de su disco virtual" -f ($dockerLiberado / 1MB)) Green
-        if (-not $hacerCompactar -and $dockerLiberado -gt 0) {
-            Log "  (para que ese espacio vuelva a Windows hay que compactar los discos virtuales: paso 12)" DarkGray
-        }
-    }
-
-    # --- Paso 12 (opcional): compactar los discos virtuales de Docker y WSL ---
-    Log "Paso 12 (opcional): compactar discos virtuales de Docker/WSL" Yellow
-    if ($hacerCompactar) {
-        $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
-        $dockerAbierto = [bool](Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)
-
-        # fstrim marca como libres los bloques borrados dentro de Linux; sin esto la compactacion no
-        # recupera lo borrado (pasaba con Docker: se borraban 1.3 GB de imagenes y el disco no bajaba)
-        foreach ($d in Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss -ErrorAction SilentlyContinue) {
-            $distro = (Get-ItemProperty $d.PSPath).DistributionName
-            if ($distro -like 'docker-desktop*') {
-                # Los datos de Docker (docker_data.vhdx) estan montados en esta ruta de su maquina virtual,
-                # y solo mientras Docker Desktop esta en marcha
-                if (-not $dockerAbierto) {
-                    Log "  Docker Desktop esta cerrado: no se puede liberar dentro de sus datos (se compacta igual, pero recupera menos)" DarkYellow
-                    continue
-                }
-                Log "  liberando bloques sin uso dentro de los datos de Docker (fstrim)..."
-                & wsl.exe -d $distro -u root -- fstrim /mnt/docker-desktop-disk 2>&1 | Out-Null
-            } else {
-                Log "  liberando bloques sin uso dentro de $distro (fstrim)..."
-                & wsl.exe -d $distro -u root -- fstrim -a 2>&1 | Out-Null
-            }
-            if ($LASTEXITCODE -ne 0) {
-                Log "  fstrim fallo en $distro (codigo $LASTEXITCODE): se compacta igual, pero puede recuperar menos" DarkYellow
-            }
-        }
-        if ($dockerAbierto) {
-            Log "  cerrando Docker Desktop..."
-            Get-Process 'Docker Desktop', 'com.docker.backend', 'com.docker.build' -ErrorAction SilentlyContinue |
-                Stop-Process -Force -ErrorAction SilentlyContinue
-        }
-        Log "  apagando WSL..."
-        & wsl.exe --shutdown 2>&1 | Out-Null
-        Start-Sleep -Seconds 5
-
-        foreach ($v in $discosVirtuales) {
-            $antes = (Get-Item $v.Ruta).Length
-            Log ("  compactando {0} ({1:N2} GB), puede tardar unos minutos..." -f $v.Nombre, ($antes / 1GB))
-            $guion = Join-Path $env:TEMP 'compactar_vhdx.txt'
-            Set-Content $guion -Encoding ASCII -Value @(
-                "select vdisk file=`"$($v.Ruta)`"", 'attach vdisk readonly', 'compact vdisk', 'detach vdisk')
-            $salida = & diskpart.exe /s $guion 2>&1
-            $codigo = $LASTEXITCODE
-            if ($codigo -ne 0) {
-                # Si fallo a mitad, asegurarse de que el disco no quede conectado
-                Set-Content $guion -Encoding ASCII -Value @("select vdisk file=`"$($v.Ruta)`"", 'detach vdisk')
-                & diskpart.exe /s $guion 2>&1 | Out-Null
-            }
-            Remove-Item $guion -ErrorAction SilentlyContinue
-            $despues = (Get-Item $v.Ruta).Length
-            # Se mide por lo que achico el .vhdx (no es disperso, asi que es lo que se libero en C:).
-            # El espacio libre de C: no sirve aqui: al apagar WSL, Windows borra su swap.vhdx de %TEMP%
-            # unos segundos despues y eso se contaba como compactacion (~1.2 GB de mas el 17/11/2026).
-            $liberado = [math]::Round([math]::Max([double]0, $antes - $despues) / 1MB, 2)
-            $compactados += [pscustomobject]@{ Nombre = $v.Nombre; Antes = $antes; Despues = $despues; Ok = ($codigo -eq 0) }
-            if ($codigo -eq 0) {
-                Log ("  {0}: {1:N2} GB -> {2:N2} GB, {3} MB liberados" -f $v.Nombre, ($antes / 1GB), ($despues / 1GB), $liberado) Green
-                $total += $liberado
-            } else {
-                $error1 = $salida | Where-Object { "$_".Trim() } | Select-Object -Last 2
-                Log "  no se pudo compactar $($v.Nombre) (codigo $codigo): $($error1 -join ' ')" Red
-            }
-        }
-
-        if ($dockerAbierto) {
-            if (Test-Path $dockerExe) {
-                # Abrirlo a traves del Explorador para que no quede ejecutandose como administrador
-                Log "  volviendo a abrir Docker Desktop..."
-                Start-Process explorer.exe -ArgumentList "`"$dockerExe`""
-            } else {
-                Log "  Docker Desktop estaba abierto pero no esta en $dockerExe : abrelo a mano" DarkYellow
-            }
-        }
-    } else {
-        Log "  compactacion omitida" DarkYellow
-    }
-
-    # --- Paso 13: TRIM del SSD (despues de compactar, para que el SSD sepa lo que se libero) ---
-    Log "Paso 13: optimizacion (TRIM) del SSD" Yellow
-    $discoC = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
-    if ($discoC.MediaType -eq 'SSD') {
-        # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
-        # solo mensaje con saltos de linea y tabuladores: se parte para que cada linea lleve su hora.
-        $inicioTrim = Get-Date
-        Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue -ErrorVariable errTrim 4>&1 |
-            ForEach-Object { "$_" -split "`r?`n" } |
-            ForEach-Object { ($_ -replace "`t", '  ').TrimEnd() } |
-            Where-Object { $_.Trim() -and $_ -notmatch '\d+% completado' } |
-            ForEach-Object { Log "  $_" DarkGray }
-        if ($errTrim) {
-            # El error solo dice "Failed"; el motivo esta en el evento 264 del optimizador (Application).
-            # Caso real del 25/11/2026: "El bit de integridad esta establecido en este volumen" (0x89000015),
-            # porque C: tenia una reparacion pendiente que chkdsk no podia hacer
-            $evTrim = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Microsoft-Windows-Defrag'; Id = 264; StartTime = $inicioTrim.AddSeconds(-5) } -MaxEvents 1 -ErrorAction SilentlyContinue
-            $trimError = if ($evTrim) { ($evTrim.Message -split ' debido a: ', 2)[-1].Trim() } else { "$($errTrim[0].Exception.Message)".Trim() }
-            Log "  el TRIM no se pudo hacer: $trimError" DarkYellow
-        } else {
-            Log "  TRIM terminado" Green
-        }
-    } else {
-        Log "  C: no es SSD, se omite" DarkYellow
-    }
-
-    # --- Paso 14: conservar solo los puntos de restauracion mas recientes ---
-    Log "Paso 14: puntos de restauracion (se conservan los $maxPuntos mas recientes)" Yellow
-    $puntos = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber)
-    Log "  hay $($puntos.Count) punto(s) de restauracion"
-    if ($puntos.Count -gt $maxPuntos) {
-        # API oficial de Windows: borra un punto concreto por su numero, sin tocar otras instantaneas
-        Add-Type -Namespace Win32 -Name SrClient -MemberDefinition `
-            '[DllImport("srclient.dll")] public static extern int SRRemoveRestorePoint(int index);'
-        foreach ($p in $puntos[0..($puntos.Count - $maxPuntos - 1)]) {
-            # ToString explicito: "$fecha" usa el formato de EE. UU. (mes/dia) aunque Windows este en espanol
-            $fecha = $p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')
-            $codigo = [Win32.SrClient]::SRRemoveRestorePoint([int]$p.SequenceNumber)
-            if ($codigo -eq 0) { Log "  borrado el mas viejo: $fecha - $($p.Description)" DarkGray }
-            else { Log "  no se pudo borrar $fecha - $($p.Description) (codigo $codigo)" DarkYellow }
-        }
-    }
-    foreach ($p in Get-ComputerRestorePoint -ErrorAction SilentlyContinue) {
-        Log "  conservado: $($p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')) - $($p.Description)" Green
-    }
+# --- Paso 7: logs, volcados de memoria e informes de error de Windows ---
+Log "Paso 7: logs de Windows (CBS y DISM), volcados de memoria e informes de error" Yellow
+$total += Clear-Folders @(
+    "$env:SystemRoot\Logs\CBS",
+    "$env:SystemRoot\Logs\DISM"
+)
+# Los volcados de memoria solo sirven para averiguar la causa de un pantallazo azul:
+# si hubo uno hace poco (o no se pudo saber) se conservan
+$cuelgues = Get-CuelguesRecientes $diasVolcados
+if (-not $cuelgues) {
+    Log "  volcados de memoria conservados: no se pudo leer el registro de eventos para saber si hubo un pantallazo azul" DarkYellow
+} elseif ($cuelgues.UltimoPantallazo) {
+    Log ("  volcados de memoria conservados: hubo un pantallazo azul el {0:dd/MM HH:mm} (sirven para averiguar la causa)" -f $cuelgues.UltimoPantallazo) DarkYellow
 } else {
-    Log "Pasos 7 a 14 omitidos: no se ejecuto como administrador" Red
+    Log "  volcados de memoria (sin pantallazos azules en los ultimos $diasVolcados dias)"
+    $volcado = "$env:SystemRoot\MEMORY.DMP"
+    if (Test-Path $volcado) {
+        $bytes = (Get-Item $volcado -Force).Length
+        Remove-Item $volcado -Force -ErrorAction SilentlyContinue -ErrorVariable err
+        if ($err) { Log "  MEMORY.DMP en uso, omitido" DarkYellow }
+        else {
+            Log "  $volcado borrado ($(Format-Tamano $bytes))" Green
+            $total += [math]::Round($bytes / 1MB, 2)
+        }
+    }
+    $total += Clear-Folders @(
+        "$env:SystemRoot\Minidump",
+        "$env:SystemRoot\LiveKernelReports"
+    )
+}
+# Informes de error de Windows ya enviados o en cola (los mismos que borra el Liberador de espacio)
+$total += Clear-Folders @(
+    "$env:ProgramData\Microsoft\Windows\WER\ReportArchive",
+    "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"
+)
+
+# --- Paso 8: cache de Delivery Optimization (comando oficial de Windows) ---
+Log "Paso 8: cache de Delivery Optimization" Yellow
+# Se mide por el espacio libre del disco, no por el tamano de los archivos:
+# esta cache usa archivos "reservados" que aparentan pesar el tamano completo
+# de la actualizacion aunque en disco ocupen mucho menos
+$libreAntes = (Get-PSDrive C).Free
+try {
+    # En otro proceso: la funcion escribe "Deleting..." con Write-Host, y en PS 5.1 el transcript lo
+    # registra sin hora aunque se redirija (6>$null no sirve). Asi su salida llega como texto.
+    $salidaDO = @(& powershell.exe -NoProfile -Command 'Delete-DeliveryOptimizationCache -Force -ErrorAction Stop' 2>&1)
+    # Si falla, solo la primera linea del error (lo demas es la ubicacion y la categoria del error)
+    if ($LASTEXITCODE -ne 0) { throw ("$(@($salidaDO | Where-Object { $_ -is [Management.Automation.ErrorRecord] })[0])".Trim()) }
+    $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
+    Log "  $liberado MB liberados (medido por el espacio libre del disco)" Green
+    $total += $liberado
+} catch {
+    Log "  no se pudo vaciar: $($_.Exception.Message)" DarkYellow
 }
 
-# --- Paso 15: aplicaciones desactualizadas (winget) ---
-Log "Paso 15: aplicaciones desactualizadas (winget)" Yellow
+# --- Paso 9 (opcional): limpieza de componentes de Windows con DISM ---
+Log "Paso 9 (opcional): limpieza profunda de Windows (restos de actualizaciones grandes y DISM)" Yellow
+# Liberador de espacio de Windows: restos de la actualizacion grande, si se autorizo.
+# Sin "Device Driver Packages": en tres ejecuciones (24 y 25/11/2026) libero 0 MB y tardo mas de
+# 1 hora (trabado), 9 minutos y 20 (cortado por el tiempo maximo)
+$categoriasLiberador = @()
+$queLiberador = @()
+if ($borrarRestos) {
+    $categoriasLiberador += 'Previous Installations', 'Temporary Setup Files', 'Windows Upgrade Log Files', 'Setup Log Files'
+    $queLiberador += 'restos de la actualizacion grande'
+}
+if ($categoriasLiberador) {
+    Log "  Liberador de espacio de Windows ($($queLiberador -join ' y ')), puede tardar unos minutos..."
+    $total += Invoke-LiberadorEspacio $categoriasLiberador
+    if ($borrarRestos) {
+        foreach ($r in @(Get-RestosActualizacion)) {
+            Log "  quedo C:\$($r.Nombre) ($(Format-Tamano $r.Bytes)): el Liberador no lo borro" DarkYellow
+        }
+    }
+}
+if (-not $borrarRestos -and $restosActualizacion) {
+    if ($restosActualizacion | Where-Object Reciente) {
+        Log "  restos de actualizaciones conservados: tienen menos de $diasRestosActualizacion dias (actualizacion en curso, o aun se puede volver atras)" DarkGray
+    } else {
+        Log "  restos de actualizaciones conservados ($(Format-Tamano $bytesRestos))" DarkGray
+    }
+}
+if ($hacerDism) {
+    $libreAntes = (Get-PSDrive C).Free
+    Log "  ejecutando DISM, no cierres esta ventana..."
+    $codigo = Invoke-Herramienta dism.exe @('/Online', '/Cleanup-Image', '/StartComponentCleanup')
+    if ($codigo -eq 0) {
+        # DISM no informa cuanto borra: se mide por el espacio libre del disco
+        $liberado = [math]::Round([math]::Max([double]0, (Get-PSDrive C).Free - $libreAntes) / 1MB, 2)
+        Log "  DISM terminado: $liberado MB liberados" Green
+        $total += $liberado
+    } else {
+        Log "  DISM termino con error (codigo $codigo)" Red
+        # 0x800f0806: hay actualizaciones esperando un reinicio
+        if ($codigo -eq -2146498554) {
+            Log "  Windows tiene operaciones pendientes: reinicia el equipo y vuelve a ejecutar la limpieza" Yellow
+        }
+    }
+} else {
+    Log "  limpieza con DISM omitida" DarkYellow
+}
+
+# --- Paso 10 (opcional): revisar y reparar archivos de Windows ---
+Log "Paso 10 (opcional): reparacion del sistema" Yellow
+if ($hacerReparacion) {
+    # Punto de restauracion por si algo sale mal
+    Log "  creando punto de restauracion..."
+    $ultimoAntes = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber | Select-Object -Last 1
+    Checkpoint-Computer -Description 'Limpieza Windows' -RestorePointType MODIFY_SETTINGS `
+        -ErrorAction SilentlyContinue -ErrorVariable errRP -WarningAction SilentlyContinue
+    $ultimo = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber | Select-Object -Last 1
+    $fechaUltimo = if ($ultimo) { $ultimo.ConvertToDateTime($ultimo.CreationTime) }
+    if ($errRP) {
+        Log "  no se pudo crear: $($errRP[0].Exception.Message)" DarkYellow
+        Log "  (suele ser porque la Proteccion del sistema esta desactivada en C:)" DarkYellow
+    } elseif ($ultimo -and $ultimo.SequenceNumber -ne $ultimoAntes.SequenceNumber) {
+        Log "  punto de restauracion creado" Green
+    } elseif ($fechaUltimo -and $fechaUltimo -gt (Get-Date).AddHours(-24)) {
+        # Windows solo permite uno cada 24 horas; se usa el mas reciente
+        Log "  ya hay uno de las ultimas 24 h, se usa ese: $fechaUltimo" Green
+    } else {
+        Log "  Windows no creo el punto de restauracion (sin mensaje de error); la reparacion sigue sin el" DarkYellow
+    }
+
+    Log "  DISM: reparando la imagen de Windows (puede quedarse un rato en el mismo %)..."
+    $codigo = Invoke-Herramienta dism.exe @('/Online', '/Cleanup-Image', '/RestoreHealth')
+    if ($codigo -eq 0) { Log "  DISM RestoreHealth terminado" Green }
+    else { Log "  DISM RestoreHealth termino con error (codigo $codigo)" Red }
+
+    Log "  SFC: revisando archivos del sistema..."
+    Invoke-Herramienta sfc.exe @('/scannow') -Unicode | Out-Null
+    Log "  SFC terminado (el resultado esta en las lineas de arriba)" Green
+} else {
+    Log "  reparacion omitida" DarkYellow
+}
+
+# --- Paso 11: limpieza de Docker ---
+# Va antes de compactar: lo que borra Docker queda libre dentro de su disco virtual,
+# y solo vuelve a Windows cuando ese disco se compacta (paso 13)
+Log "Paso 11: limpieza de Docker" Yellow
+if (-not $dockerInstalado) {
+    Log "  Docker no esta instalado: se omite" DarkGray
+} elseif (-not $dockerActivo) {
+    Log "  Docker no esta en marcha (Docker Desktop cerrado): se omite" DarkYellow
+} else {
+    # Sin riesgo: nada de esto lo usa ningun contenedor ni contiene datos (los volumenes no se tocan nunca)
+    $limpiezasDocker = @(
+        @{ Texto = 'contenedores detenidos'; Argumentos = @('container', 'prune', '-f') },
+        @{ Texto = 'imagenes huerfanas';     Argumentos = @('image', 'prune', '-f') },
+        @{ Texto = 'cache de compilacion';   Argumentos = @('builder', 'prune', '-f') },
+        @{ Texto = 'redes sin usar';         Argumentos = @('network', 'prune', '-f') }
+    )
+    foreach ($l in $limpiezasDocker) {
+        $salida = & docker @($l.Argumentos) 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Log "  $($l.Texto): error (codigo $LASTEXITCODE): $(($salida | Select-Object -Last 1))" Red
+            continue
+        }
+        # Docker informa lo recuperado en una linea "Total reclaimed space: X" o "Total: X"
+        $lineaTotal = $salida | Where-Object { "$_" -match '^Total' } | Select-Object -Last 1
+        if ($lineaTotal) {
+            $bytes = ConvertFrom-TamanoDocker $lineaTotal
+            $dockerLiberado += $bytes
+            Log ("  {0}: {1:N2} MB" -f $l.Texto, ($bytes / 1MB))
+        } else {
+            Log "  $($l.Texto): nada que borrar"
+        }
+    }
+
+    # Imagenes sin usar: solo si se autorizo, y solo las que se listaron en la pregunta
+    if ($borrarImagenesDocker) {
+        foreach ($img in $imagenesDockerSinUso) {
+            $salida = & docker rmi $img.Nombre 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Log ("  imagen borrada: {0} ({1:N2} MB)" -f $img.Nombre, ($img.Bytes / 1MB))
+                $imagenesDockerBorradas += $img
+            } else {
+                # Por ejemplo, si se empezo a usar despues de la pregunta
+                Log "  no se pudo borrar la imagen $($img.Nombre): $(($salida | Select-Object -Last 1))" DarkYellow
+            }
+        }
+        # Las capas compartidas entre imagenes se cuentan una vez por Id; es un maximo aproximado
+        $dockerLiberado += ($imagenesDockerBorradas | Sort-Object Id -Unique | Measure-Object Bytes -Sum).Sum
+    } elseif ($imagenesDockerSinUso) {
+        Log "  imagenes sin usar conservadas: $listaImagenes" DarkGray
+    }
+
+    Log ("  Docker: {0:N2} MB liberados dentro de su disco virtual" -f ($dockerLiberado / 1MB)) Green
+    if (-not $hacerCompactar -and $dockerLiberado -gt 0) {
+        Log "  (para que ese espacio vuelva a Windows hay que compactar los discos virtuales: paso 13)" DarkGray
+    }
+}
+
+# --- Paso 12 (opcional): actualizar los paquetes de Linux en WSL ---
+# Va antes de compactar: WSL tiene que estar encendido, y lo que libera apt-get clean
+# vuelve a Windows al compactar (paso 13)
+Log "Paso 12 (opcional): paquetes de Linux en WSL (apt)" Yellow
+if (-not $distrosApt) {
+    Log "  no hay distribuciones WSL con apt: se omite" DarkGray
+} elseif ($actualizarWsl) {
+    foreach ($distro in $distrosApt) { $actualizacionesWsl += Update-PaquetesWsl $distro }
+} else {
+    Log "  actualizacion de WSL omitida" DarkYellow
+}
+
+# --- Paso 13 (opcional): compactar los discos virtuales de Docker y WSL ---
+Log "Paso 13 (opcional): compactar discos virtuales de Docker/WSL" Yellow
+if ($hacerCompactar) {
+    $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+    $dockerAbierto = [bool](Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue)
+
+    # fstrim marca como libres los bloques borrados dentro de Linux; sin esto la compactacion no
+    # recupera lo borrado (pasaba con Docker: se borraban 1.3 GB de imagenes y el disco no bajaba)
+    foreach ($d in Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss -ErrorAction SilentlyContinue) {
+        $distro = (Get-ItemProperty $d.PSPath).DistributionName
+        if ($distro -like 'docker-desktop*') {
+            # Los datos de Docker (docker_data.vhdx) estan montados en esta ruta de su maquina virtual,
+            # y solo mientras Docker Desktop esta en marcha
+            if (-not $dockerAbierto) {
+                Log "  Docker Desktop esta cerrado: no se puede liberar dentro de sus datos (se compacta igual, pero recupera menos)" DarkYellow
+                continue
+            }
+            Log "  liberando bloques sin uso dentro de los datos de Docker (fstrim)..."
+            & wsl.exe -d $distro -u root -- fstrim /mnt/docker-desktop-disk 2>&1 | Out-Null
+        } else {
+            Log "  liberando bloques sin uso dentro de $distro (fstrim)..."
+            & wsl.exe -d $distro -u root -- fstrim -a 2>&1 | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Log "  fstrim fallo en $distro (codigo $LASTEXITCODE): se compacta igual, pero puede recuperar menos" DarkYellow
+        }
+    }
+    if ($dockerAbierto) {
+        Log "  cerrando Docker Desktop..."
+        Get-Process 'Docker Desktop', 'com.docker.backend', 'com.docker.build' -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Log "  apagando WSL..."
+    & wsl.exe --shutdown 2>&1 | Out-Null
+    Start-Sleep -Seconds 5
+
+    foreach ($v in $discosVirtuales) {
+        $antes = (Get-Item $v.Ruta).Length
+        Log ("  compactando {0} ({1:N2} GB), puede tardar unos minutos..." -f $v.Nombre, ($antes / 1GB))
+        $guion = Join-Path $env:TEMP 'compactar_vhdx.txt'
+        Set-Content $guion -Encoding ASCII -Value @(
+            "select vdisk file=`"$($v.Ruta)`"", 'attach vdisk readonly', 'compact vdisk', 'detach vdisk')
+        $salida = & diskpart.exe /s $guion 2>&1
+        $codigo = $LASTEXITCODE
+        if ($codigo -ne 0) {
+            # Si fallo a mitad, asegurarse de que el disco no quede conectado
+            Set-Content $guion -Encoding ASCII -Value @("select vdisk file=`"$($v.Ruta)`"", 'detach vdisk')
+            & diskpart.exe /s $guion 2>&1 | Out-Null
+        }
+        Remove-Item $guion -ErrorAction SilentlyContinue
+        $despues = (Get-Item $v.Ruta).Length
+        # Se mide por lo que achico el .vhdx (no es disperso, asi que es lo que se libero en C:).
+        # El espacio libre de C: no sirve aqui: al apagar WSL, Windows borra su swap.vhdx de %TEMP%
+        # unos segundos despues y eso se contaba como compactacion (~1.2 GB de mas el 17/11/2026).
+        $liberado = [math]::Round([math]::Max([double]0, $antes - $despues) / 1MB, 2)
+        $compactados += [pscustomobject]@{ Nombre = $v.Nombre; Antes = $antes; Despues = $despues; Ok = ($codigo -eq 0) }
+        if ($codigo -eq 0) {
+            Log ("  {0}: {1:N2} GB -> {2:N2} GB, {3} MB liberados" -f $v.Nombre, ($antes / 1GB), ($despues / 1GB), $liberado) Green
+            $total += $liberado
+        } else {
+            $error1 = $salida | Where-Object { "$_".Trim() } | Select-Object -Last 2
+            Log "  no se pudo compactar $($v.Nombre) (codigo $codigo): $($error1 -join ' ')" Red
+        }
+    }
+
+    if ($dockerAbierto) {
+        if (Test-Path $dockerExe) {
+            # Abrirlo a traves del Explorador para que no quede ejecutandose como administrador
+            Log "  volviendo a abrir Docker Desktop..."
+            Start-Process explorer.exe -ArgumentList "`"$dockerExe`""
+        } else {
+            Log "  Docker Desktop estaba abierto pero no esta en $dockerExe : abrelo a mano" DarkYellow
+        }
+    }
+} else {
+    Log "  compactacion omitida" DarkYellow
+}
+
+# --- Paso 14: TRIM del SSD (despues de compactar, para que el SSD sepa lo que se libero) ---
+Log "Paso 14: optimizacion (TRIM) del SSD" Yellow
+$discoC = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
+if ($discoC.MediaType -eq 'SSD') {
+    # Sin las lineas de progreso ("NN% completado") ni las vacias. El informe final llega en un
+    # solo mensaje con saltos de linea y tabuladores: se parte para que cada linea lleve su hora.
+    $inicioTrim = Get-Date
+    Optimize-Volume -DriveLetter C -ReTrim -Verbose -ErrorAction SilentlyContinue -ErrorVariable errTrim 4>&1 |
+        ForEach-Object { "$_" -split "`r?`n" } |
+        ForEach-Object { ($_ -replace "`t", '  ').TrimEnd() } |
+        Where-Object { $_.Trim() -and $_ -notmatch '\d+% completado' } |
+        ForEach-Object { Log "  $_" DarkGray }
+    if ($errTrim) {
+        # El error solo dice "Failed"; el motivo esta en el evento 264 del optimizador (Application).
+        # Caso real del 25/11/2026: "El bit de integridad esta establecido en este volumen" (0x89000015),
+        # porque C: tenia una reparacion pendiente que chkdsk no podia hacer
+        $evTrim = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Microsoft-Windows-Defrag'; Id = 264; StartTime = $inicioTrim.AddSeconds(-5) } -MaxEvents 1 -ErrorAction SilentlyContinue
+        $trimError = if ($evTrim) { ($evTrim.Message -split ' debido a: ', 2)[-1].Trim() } else { "$($errTrim[0].Exception.Message)".Trim() }
+        Log "  el TRIM no se pudo hacer: $trimError" DarkYellow
+    } else {
+        Log "  TRIM terminado" Green
+    }
+} else {
+    Log "  C: no es SSD, se omite" DarkYellow
+}
+
+# --- Paso 15: conservar solo los puntos de restauracion mas recientes ---
+Log "Paso 15: puntos de restauracion (se conservan los $maxPuntos mas recientes)" Yellow
+$puntos = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber)
+Log "  hay $($puntos.Count) punto(s) de restauracion"
+if ($puntos.Count -gt $maxPuntos) {
+    # API oficial de Windows: borra un punto concreto por su numero, sin tocar otras instantaneas
+    Add-Type -Namespace Win32 -Name SrClient -MemberDefinition `
+        '[DllImport("srclient.dll")] public static extern int SRRemoveRestorePoint(int index);'
+    foreach ($p in $puntos[0..($puntos.Count - $maxPuntos - 1)]) {
+        # ToString explicito: "$fecha" usa el formato de EE. UU. (mes/dia) aunque Windows este en espanol
+        $fecha = $p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')
+        $codigo = [Win32.SrClient]::SRRemoveRestorePoint([int]$p.SequenceNumber)
+        if ($codigo -eq 0) { Log "  borrado el mas viejo: $fecha - $($p.Description)" DarkGray }
+        else { Log "  no se pudo borrar $fecha - $($p.Description) (codigo $codigo)" DarkYellow }
+    }
+}
+foreach ($p in Get-ComputerRestorePoint -ErrorAction SilentlyContinue) {
+    Log "  conservado: $($p.ConvertToDateTime($p.CreationTime).ToString('dd/MM/yyyy HH:mm')) - $($p.Description)" Green
+}
+
+# --- Paso 16: aplicaciones desactualizadas (winget) ---
+Log "Paso 16: aplicaciones desactualizadas (winget)" Yellow
 $appsActualizadas = @()
 $appsFallidas = @()
 $appsOmitidas = @()
@@ -1020,12 +1182,12 @@ if ($seActualizo) {
     }
 }
 
-# --- Paso 16: revision de salud del equipo (solo lectura: no cambia nada) ---
+# --- Paso 17: revision de salud del equipo (solo lectura: no cambia nada) ---
 # Windows Update, sistema de archivos, errores de hardware, seguridad y respaldo. El resultado va al
 # resumen; el detalle (titulos de actualizaciones, etc.) queda aqui en el log.
-Log "Paso 16: revision de salud del equipo (solo lectura)" Yellow
+Log "Paso 17: revision de salud del equipo (solo lectura)" Yellow
 $discoSistema = Get-PhysicalDisk | Where-Object DeviceId -eq (Get-Partition -DriveLetter C).DiskNumber
-$salud = Get-SaludEquipo $discoSistema $esAdmin
+$salud = Get-SaludEquipo $discoSistema $true
 
 Log "=== Limpieza completada ===" Cyan
 
@@ -1042,7 +1204,7 @@ $inicio = @(Get-CimInstance Win32_StartupCommand |
 
 $unidadC = Get-PSDrive C
 Show-Resumen @{
-    EsAdmin          = $esAdmin
+    EsAdmin          = $true
     DiscoC           = $discoSistema
     Salud            = $salud
     Total            = $total
@@ -1065,6 +1227,9 @@ Show-Resumen @{
     AppsFallidas     = $appsFallidas
     AppsPendientes   = $appsPendientes
     AppsOmitidas     = $appsOmitidas
+    DistrosApt       = $distrosApt
+    ActualizarWsl    = $actualizarWsl
+    ActualizacionesWsl = $actualizacionesWsl
 }
 
 # --- Historial (lib\historial.ps1): se guarda despues del resumen para incluir los avisos ---

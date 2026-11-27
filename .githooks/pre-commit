@@ -1,0 +1,4 @@
+#!/bin/sh
+# Antes de cada commit: sintaxis, solo ASCII y pruebas (verificar.ps1).
+# Se activa una vez por equipo con: git config core.hooksPath .githooks
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File verificar.ps1

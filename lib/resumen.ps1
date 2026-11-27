@@ -189,7 +189,7 @@ function Write-TablaApps($titulo, $apps, $color, [switch]$ConMotivo) {
 
 # Muestra el resumen. $d es un hashtable con los datos que junta limpiar.ps1.
 function Show-Resumen($d) {
-    $salud = $d.Salud   # lo junta Get-SaludEquipo (lib\salud.ps1) en el paso 16
+    $salud = $d.Salud   # lo junta Get-SaludEquipo (lib\salud.ps1) en el paso 17
 
     $subtitulo = $env:COMPUTERNAME
     if ($salud.Version) { $subtitulo += " - $($salud.Version.Nombre)" }
@@ -241,6 +241,11 @@ function Show-Resumen($d) {
             Write-Dato 'Limpieza de Docker' 'no estaba en marcha' DarkGray
         }
     }
+    # apt-get clean en WSL (paso 12): tambien queda dentro del disco virtual de cada distro
+    if ($d.ActualizacionesWsl) {
+        $cacheApt = (@($d.ActualizacionesWsl) | Measure-Object CacheBytes -Sum).Sum
+        Write-Dato 'Cache de apt en WSL' ('{0:N2} MB' -f ($cacheApt / 1MB)) Green
+    }
     foreach ($c in $d.Compactados) {
         if ($c.Ok) { Write-Dato "Disco virtual $($c.Nombre)" ('{0:N2} GB -> {1:N2} GB' -f ($c.Antes / 1GB), ($c.Despues / 1GB)) Green }
         else { Write-Dato "Disco virtual $($c.Nombre)" 'no se pudo compactar (ver log)' Red }
@@ -281,7 +286,7 @@ function Show-Resumen($d) {
     }
     elseif ($salud.SistemaArchivos -match 'Fixed') { Write-Estado 'OK' 'Sistema de archivos' 'errores menores, ya corregidos en linea' }
     else { Write-Estado 'AVISO' 'Sistema de archivos' "errores ($($salud.SistemaArchivos)): como admin, 'chkdsk C: /f' (S) y reiniciar" }
-    # Solo si fallo: sin TRIM el SSD se va volviendo mas lento al escribir (ver log, paso 13)
+    # Solo si fallo: sin TRIM el SSD se va volviendo mas lento al escribir (ver log, paso 14)
     if ($d.TrimError) {
         $textoTrim = "no se pudo hacer: $($d.TrimError)"
         # 0x89000015: C: esta marcado para revisar y Windows no optimiza hasta que se repare
@@ -424,6 +429,33 @@ function Show-Resumen($d) {
         Write-Nota "Para actualizarlas, responde S a 'Actualizar las aplicaciones' la proxima vez"
     } else {
         Write-Nota 'Todas las aplicaciones estan al dia' Green
+    }
+
+    # --- Paquetes de Linux en WSL (paso 12): solo si hay distros con apt ---
+    if ($d.DistrosApt) {
+        Write-Seccion 'PAQUETES DE LINUX (WSL)'
+        if (-not $d.ActualizarWsl) {
+            Write-Dato 'Distribuciones' (@($d.DistrosApt) -join ', ') White
+            Write-Nota "No se actualizaron. Para hacerlo, responde S a 'Actualizar los paquetes de Linux' la proxima vez"
+        }
+        foreach ($r in $d.ActualizacionesWsl) {
+            $paquetes = @($r.Paquetes)
+            if (-not $r.Ok) {
+                Write-Dato $r.Nombre 'error (ver log)' Red
+                Write-Nota $r.Error Red
+            } elseif ($paquetes.Count -eq 0) {
+                Write-Dato $r.Nombre 'todo al dia' Green
+            } else {
+                Write-Dato $r.Nombre "$($paquetes.Count) paquete(s) actualizado(s)" Green
+                # Con muchos paquetes la lista no aporta en el correo: queda completa en el log
+                if ($paquetes.Count -le 15) { Write-TablaApps 'Actualizados' $paquetes Green }
+                else { Write-Nota 'La lista completa con las versiones esta en el log' }
+            }
+            if ($r.Retenidos -gt 0) {
+                # Normalmente actualizaciones escalonadas de Ubuntu: llegan solas en otra ejecucion
+                Write-Nota ("{0}: {1} paquete(s) retenido(s) por apt; suelen actualizarse en una proxima ejecucion" -f $r.Nombre, $r.Retenidos)
+            }
+        }
     }
 
     Close-Tarjeta

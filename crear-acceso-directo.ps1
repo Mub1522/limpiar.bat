@@ -1,6 +1,6 @@
-# Crea en el Escritorio un acceso directo a limpiar.bat con el icono limpiar.ico.
-# Uso: clic derecho > "Ejecutar con PowerShell", o:
-#   powershell -ExecutionPolicy Bypass -File crear-acceso-directo.ps1
+# Crea en el Escritorio un acceso directo a limpiar.bat con el icono limpiar.ico
+# (un .bat no puede tener icono propio).
+# Uso: doble clic en crear-acceso-directo.bat (lo llama con -ExecutionPolicy Bypass).
 # Si mueves la carpeta del script, vuelve a ejecutarlo (el acceso directo guarda rutas completas).
 
 $carpeta = $PSScriptRoot

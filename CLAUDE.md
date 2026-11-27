@@ -23,31 +23,34 @@ El usuario habla en español. **Todo lo que ve el usuario va en español**: cons
 
 ### 2.1 Lo que hace
 
-| Paso | Qué hace | Admin | Pregunta |
-|---|---|---|---|
-| 1 | Temporales del usuario (`%TEMP%`), solo los de más de 24 h | no | — |
-| 2 | Temporales de Windows, solo los de más de 24 h | sí | — |
-| 3 | Caché de Windows Update (detiene y reinicia `wuauserv`/`bits`) | sí | — |
-| 4 | Caché de navegadores, VS Code y apps de chat (Teams, Discord, Slack) | no | cerrar navegador o app abierta |
-| 5 | Caché de shaders de la GPU | no | — |
-| 6 | Caché de pip, npm, Yarn 1, pnpm (`store prune`) y Go; NuGet y logs de PM2 | no | NuGet y PM2 (si pasan de 50 MB) |
-| 7 | Logs CBS/DISM, informes de error (WER) y volcados de memoria | sí | — |
-| 8 | Caché de Delivery Optimization | sí | — |
-| 9 | Limpieza profunda: Liberador de espacio (restos de actualización grande) y DISM | sí | DISM; restos de actualización |
-| 10 | Reparación: punto de restauración + DISM RestoreHealth + SFC | sí | sí |
-| 11 | Docker: `prune` sin riesgo; imágenes sin usar solo si se autoriza | sí | imágenes |
-| 12 | Compactar discos virtuales de WSL y Docker (`fstrim` + `diskpart`) | sí | sí |
-| 13 | TRIM del SSD | sí | — |
-| 14 | Puntos de restauración: conserva los `$maxPuntos` más recientes | sí | — |
-| 15 | Apps desactualizadas (winget): siempre lista; actualiza con admin + S | parcial | actualizar |
-| 16 | Revisión de salud, solo lectura (Windows Update, sistema de archivos, hardware, seguridad, respaldo...) | parcial | — |
+Todo corre como administrador: sin ese permiso el script no hace nada (ver 4.2).
+
+| Paso | Qué hace | Pregunta |
+|---|---|---|
+| 1 | Temporales del usuario (`%TEMP%`), solo los de más de 24 h | — |
+| 2 | Temporales de Windows, solo los de más de 24 h | — |
+| 3 | Caché de Windows Update (detiene y reinicia `wuauserv`/`bits`) | — |
+| 4 | Caché de navegadores, VS Code y apps de chat (Teams, Discord, Slack) | cerrar navegador o app abierta |
+| 5 | Caché de shaders de la GPU | — |
+| 6 | Caché de pip, npm, Yarn 1, pnpm (`store prune`) y Go; NuGet y logs de PM2 | NuGet y PM2 (si pasan de 50 MB) |
+| 7 | Logs CBS/DISM, informes de error (WER) y volcados de memoria | — |
+| 8 | Caché de Delivery Optimization | — |
+| 9 | Limpieza profunda: Liberador de espacio (restos de actualización grande) y DISM | DISM; restos de actualización |
+| 10 | Reparación: punto de restauración + DISM RestoreHealth + SFC | sí |
+| 11 | Docker: `prune` sin riesgo; imágenes sin usar solo si se autoriza | imágenes |
+| 12 | Paquetes de Linux en WSL: `apt-get update` + `upgrade` (sin instalar ni quitar) y `apt-get clean` | sí (solo si hay distros con apt) |
+| 13 | Compactar discos virtuales de WSL y Docker (`fstrim` + `diskpart`) | sí |
+| 14 | TRIM del SSD | — |
+| 15 | Puntos de restauración: conserva los `$maxPuntos` más recientes | — |
+| 16 | Apps desactualizadas (winget): siempre lista; actualiza con S | actualizar |
+| 17 | Revisión de salud, solo lectura (Windows Update, sistema de archivos, hardware, seguridad, respaldo...) | — |
 
 ### 2.2 Lo que NO hace (riesgos que no toma)
 
 Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles**, salvo que el usuario lo pida explícitamente después de conocer el riesgo:
 
 - **Limpiar el registro.** No da una mejora medible, y un error puede dejar programas o Windows sin arrancar.
-- **Desfragmentar.** En un SSD gasta vida útil; para eso está el TRIM (paso 13).
+- **Desfragmentar.** En un SSD gasta vida útil; para eso está el TRIM (paso 14).
 - **Desactivar servicios.** Lo que se gana es mínimo y las fallas aparecen en silencio, a veces semanas después.
 - **"Liberar RAM".** Windows usa la RAM libre como caché; vaciarla hace que todo cargue más lento.
 - **Desactivar programas de inicio.** Solo se informan; decide el usuario.
@@ -55,7 +58,8 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 - **Borrar `C:\Windows\Installer` o `$PatchCache$`.** Sin esos archivos no se pueden reparar ni desinstalar programas.
 - **Borrar la caché de miniaturas.** Exige cerrar el Explorador de Windows y libera muy poco.
 - **`docker volume prune` o `docker image prune -a`.** Los volúmenes guardan las bases de datos de los proyectos.
-- **Instalar actualizaciones de Windows, drivers o BIOS.** Solo se informan (paso 16).
+- **Instalar actualizaciones de Windows, drivers o BIOS.** Solo se informan (paso 17).
+- **`apt full-upgrade`/`dist-upgrade` o `apt autoremove` en WSL.** Instalan o quitan paquetes de los que pueden depender los entornos de desarrollo; el paso 12 solo usa `apt-get upgrade`.
 - **Cerrar VS Code.** Puede haber archivos sin guardar.
 - **Tocar historial, cookies, contraseñas o sesiones** de navegadores y apps.
 - **Borrar la carpeta del almacén de pnpm o la caché de Yarn 2+.** Los proyectos dependen de ellas.
@@ -66,14 +70,15 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 
 - **Nunca ejecutar `limpiar.ps1` ni `limpiar.bat`.** Borran archivos, detienen servicios, actualizan apps y piden UAC. El usuario lo ejecuta y después pide "validar/revisar el log" (`limpieza.log`, que se sobrescribe en cada ejecución).
 - **El `README.md` siempre al día y fiel al script.** Nunca debe describir algo que el script ya no hace, ni omitir algo que sí hace. En cada cambio a `limpiar.ps1`, `limpiar.bat`, `lib\*.ps1` o al formato de `correo.json`, en el mismo turno y sin que lo pidan:
-  - actualizar las secciones afectadas: archivos, preguntas, pasos y su numeración, pasos de administrador, resumen final, correo, configuración, recomendaciones y "Lo que no hace";
+  - actualizar las secciones afectadas: archivos, preguntas, pasos y su numeración, resumen final, correo, configuración, recomendaciones y "Lo que no hace";
   - agregar una entrada con fecha en "Historial de cambios" (la más reciente arriba);
-  - releer el README contra el script para confirmar que nada más quedó desactualizado.
+  - releer el README contra el script para confirmar que nada más quedó desactualizado;
+  - seguir las reglas de estructura del README (sección 10), sobre todo "Requisitos" e "Instalación en otro equipo" (10.2).
 - **Este `CLAUDE.md` también se mantiene al día** en el mismo turno (ver sección 9).
 - **Todo lo útil tiene que quedar en `limpieza.log`** (ver 6.2).
 - **No enviar correos** (por ejemplo, para probar Resend) sin preguntar antes.
 - **Revisiones elevadas de solo lectura** (puntos de restauración, instantáneas, etc.): escribir un `.ps1` pequeño en el scratchpad y ejecutarlo con `Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -File ...`, guardando el resultado en un archivo de `%TEMP%`. El usuario tiene que aceptar el UAC, así que hay que avisarle antes.
-- **Repositorio público.** `correo.json`, `limpieza.log`, `historial.csv` y `*.lnk` están en `.gitignore`. Nunca subir datos personales: correos, nombre del equipo, rutas del usuario, nombres de proyectos. `correo.json` guarda la **API key de Resend**: nunca copiarla al README, al log, al chat ni a otro archivo. Mantener `correo.ejemplo.json` igual al formato real.
+- **Repositorio público.** `correo.json`, `limpieza.log`, `historial.csv` y `*.lnk` están en `.gitignore`. Nunca subir datos personales: correos, nombre del equipo, rutas del usuario, nombres de proyectos. `correo.json` guarda la **API key de Resend**: nunca copiarla al README, al log, al chat ni a otro archivo. Mantener `correo.ejemplo.json` igual al formato real. `memory-global/` también se sube: nada privado ahí (va a `memory-local/`, ver 11).
 - No hacer commit salvo que el usuario lo pida.
 
 ---
@@ -85,25 +90,34 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | Archivo | Rol |
 |---|---|
 | `limpiar.bat` | Comprueba si tiene permisos de administrador con `net session`; si no, se relanza con `Start-Process -Verb RunAs`. Después ejecuta `limpiar.ps1` con `-ExecutionPolicy Bypass`. |
-| `limpiar.ps1` | Flujo principal: funciones de apoyo, configuración, preguntas, los 16 pasos numerados, resumen, historial y correo. |
+| `limpiar.ps1` | Flujo principal: funciones de apoyo, configuración, preguntas, los 17 pasos numerados, resumen, historial y correo. |
 | `lib\resumen.ps1` | Presentación del resumen: consola + HTML del correo. |
 | `lib\salud.ps1` | Datos de salud del equipo (solo lectura). |
 | `lib\historial.ps1` | `historial.csv`: última ejecución, tendencia del espacio, `Format-Hace`. |
 | `lib\correo.ps1` | Lectura de `correo.json` y envío con Resend. |
-| `crear-acceso-directo.ps1` | Crea el acceso directo del Escritorio con `limpiar.ico`. |
+| `crear-acceso-directo.bat` | Lo que abre el usuario: llama al `.ps1` con `-ExecutionPolicy Bypass`, igual que `limpiar.bat`. Un `.ps1` con doble clic se abre en el Bloc de notas, y con *Ejecutar con PowerShell* fallaba a veces por la política de ejecución (lo reportó el usuario el 2026-11-26). Sin admin. |
+| `crear-acceso-directo.ps1` | Crea el acceso directo del Escritorio con `limpiar.ico`. El icono va solo en el acceso directo, no en la carpeta (lo decidió el usuario el 2026-11-26). Un `.bat` no puede tener icono propio: no intentarlo con un `.exe` envoltorio (lo marcan los antivirus y deja de ser un script legible). |
 | `limpiar.ico` | Icono (negro con rojo neón; PNG de 16 a 256 px dentro del `.ico`). |
 | `correo.ejemplo.json` | Plantilla pública de `correo.json`. |
+| `verificar.ps1` | Revisión sin ejecutar la limpieza: sintaxis, solo ASCII, pruebas y PSScriptAnalyzer (si está instalado). Sale con 1 si algo falla. |
+| `tests\cargar.ps1` | Carga las funciones de `limpiar.ps1` desde el AST (sin ejecutar el script) y los módulos de `lib\`; `Log` no escribe nada. |
+| `tests\*.Tests.ps1` | Pruebas de Pester (ver 8.4). |
+| `tests\muestras\` | Salidas de ejemplo de winget y apt (UTF-8, sin datos de ningún equipo). |
+| `memory-global\` | Memoria de Claude Code que vale en cualquier PC (ver 11). No la usa el script. |
+| `.vscode\settings.json` | Colores de VS Code (negro con rojo neón, la paleta de `lib\resumen.ps1`). Se versiona para que todos los PCs del usuario se vean igual (2026-11-26): no poner ahí rutas ni datos de un PC. |
+| `.githooks\pre-commit` | Corre `verificar.ps1` antes de cada commit. Se activa por equipo con `git config core.hooksPath .githooks`; va en LF (`.gitattributes`) porque lo ejecuta `sh`. |
 
 ### 4.2 Flujo de `limpiar.ps1`
 
-1. `Start-Transcript`: el transcript **es** `limpieza.log`, y la salida de `Write-Host` también queda registrada.
-2. Carga los módulos de `lib\` con dot-sourcing.
-3. Define las funciones de apoyo y la configuración.
-4. **Inicio:** recuadro (`Write-CajaConsola`), reúne los datos que necesitan las preguntas y arma `$preguntas`, solo con las que aplican ahora. Cada pregunta tiene `Clave`, `Titulo` y `Detalle`.
-5. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no, Enter = No, y vuelve a preguntar si la respuesta no es válida. Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
-6. **Pasos 1 a 16**, sin intervención. Los que necesitan administrador van agrupados en `if ($esAdmin) { ... } else { Log "Pasos X a Y omitidos..." }`: hoy son el 2-3 y el 7-14. Al agregar pasos hay que actualizar ese mensaje. Los pasos 15 y 16 corren fuera del grupo y saltan solos sus partes de administrador.
-7. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 16, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
-8. `Stop-Transcript`. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
+1. **Sin administrador, sale** con un aviso y espera Enter, **antes** de `Start-Transcript`: así no reemplaza el log de la ejecución anterior, ni guarda historial, ni envía correo. Antes había un modo a medias (pasos 1, 4-6, 16 y 17); se quitó el 2026-11-26 a pedido del usuario porque dejaba el resumen y el historial incompletos. Casi nunca llega a pasar: `limpiar.bat` ya se cierra si se rechaza el UAC. `reglas.Tests.ps1` comprueba que la salida va antes del log y que no vuelve ningún `if ($esAdmin)`.
+2. `Start-Transcript`: el transcript **es** `limpieza.log`, y la salida de `Write-Host` también queda registrada.
+3. Carga los módulos de `lib\` con dot-sourcing.
+4. Define las funciones de apoyo y la configuración.
+5. **Inicio:** recuadro (`Write-CajaConsola`), reúne los datos que necesitan las preguntas y arma `$preguntas`, solo con las que aplican ahora. Cada pregunta tiene `Clave`, `Titulo` y `Detalle`.
+6. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no; Enter sin nada no vale y se vuelve a preguntar (lo pidió el usuario el 2026-11-26: hay que elegir); `T`/`todas` = sí a esa y a las que faltan (las tarjetas siguientes se muestran igual, con `-> SI (todas)`, para que el usuario vea qué aceptó y quede en el log), y vuelve a preguntar si la respuesta no es válida. La lectura de la respuesta está en `ConvertFrom-RespuestaSiNo` (con prueba). Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$actualizarWsl`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
+7. **Pasos 1 a 17**, sin intervención y siempre como administrador. A `Get-SaludEquipo` y `Show-Resumen` se les pasa `$true`: los módulos de `lib\` siguen aceptando `$false` para la vista previa sin permisos (8.2).
+8. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 17, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
+9. `Stop-Transcript`. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
 
 ### 4.3 Módulos de `lib\`
 
@@ -111,8 +125,8 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
   - texto de ancho fijo con colores para la consola y el log (`Out-Resumen`);
   - HTML adaptable para el correo (`Add-Html` en `$resumenHtml`): una tarjeta por sección, filas de tabla y etiquetas de estado; máximo 600 px y 100 % en el celular.
 
-  Nunca escribir contenido del resumen en una sola de las dos versiones. En el correo, solo estilos en línea y tablas (los clientes de correo ignoran `<style>` y flexbox); el texto pasa por `Format-HtmlTexto`. La paleta (negro con rojo neón) está arriba del archivo: `$neon`, `$brilloNeon`, `$fondoHtml`, `$lineaHtml` y `$coloresHtml`. El HTML se declara `color-scheme: dark` para que el modo oscuro del celular no invierta los colores. `Write-Estado` tiene cuatro niveles: `OK`, `AVISO`, `INFO` (solo informa) y `NA` (dato no disponible). Solo `AVISO` se cuenta en `$avisosResumen`, que va en el asunto del correo; lo que el usuario puede tener resuelto de otra forma va como `INFO`. Secciones: Espacio, Salud del equipo (hardware), Windows y seguridad, Programas de inicio, Aplicaciones.
-- **`salud.ps1`**: `Get-SaludEquipo`, que se llama en el paso 16 y deja el detalle en el log con `Log`, junta:
+  Nunca escribir contenido del resumen en una sola de las dos versiones. En el correo, solo estilos en línea y tablas (los clientes de correo ignoran `<style>` y flexbox); el texto pasa por `Format-HtmlTexto`. La paleta (negro con rojo neón) está arriba del archivo: `$neon`, `$brilloNeon`, `$fondoHtml`, `$lineaHtml` y `$coloresHtml`. El HTML se declara `color-scheme: dark` para que el modo oscuro del celular no invierta los colores. `Write-Estado` tiene cuatro niveles: `OK`, `AVISO`, `INFO` (solo informa) y `NA` (dato no disponible). Solo `AVISO` se cuenta en `$avisosResumen`, que va en el asunto del correo; lo que el usuario puede tener resuelto de otra forma va como `INFO`. Secciones: Espacio, Salud del equipo (hardware), Windows y seguridad, Programas de inicio, Aplicaciones y Paquetes de Linux (WSL; solo si hay distros con apt).
+- **`salud.ps1`**: `Get-SaludEquipo`, que se llama en el paso 17 y deja el detalle en el log con `Log`, junta:
   - batería, contadores del SSD, `Repair-Volume -Scan` (admin) y WinRE;
   - versión de Windows;
   - Windows Update, con el COM `Microsoft.Update.Session`: pendientes, opcionales, última instalada y las que fallaron sin volver a instalarse. La búsqueda tarda unos 30-60 s;
@@ -136,25 +150,28 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `Invoke-Herramienta` | Ejecuta dism/sfc: junta las barras de progreso (`\r`) y registra el progreso cada 10 %. `-Unicode` para la salida UTF-16 de sfc. |
 | `Invoke-LimpiezaComando` | Ejecuta el comando oficial de limpieza de una herramienta (pnpm, go) y mide lo que achicó su carpeta. |
 | `Invoke-LiberadorEspacio` | `cleanmgr /sagerun:42` solo con las categorías indicadas (marca temporal `StateFlags0042`, que se quita al terminar), con un tiempo máximo de 20 min; mide por el espacio libre del disco. |
-| `Remove-PerfilLiberador` | Quita la marca `StateFlags0042`. También se llama al inicio (con permisos de administrador) para limpiar lo que haya dejado una ejecución cortada. |
+| `Remove-PerfilLiberador` | Quita la marca `StateFlags0042`. También se llama al inicio para limpiar lo que haya dejado una ejecución cortada. |
 | `Stop-Programa` | Cierra un programa: primero sus ventanas, después a la fuerza lo que quede. |
 | `Get-CarpetasCache` | Carpetas exactamente `Cache`, `Code Cache` o `GPUCache` dentro de una app Electron/WebView2. |
 | `Get-RestosActualizacion` | `Windows.old`, `$WINDOWS.~BT` y `$WINDOWS.~WS`, con tamaño y si son recientes. |
 | `Test-InicioHabilitado` | Lee `Explorer\StartupApproved` (primer byte impar = deshabilitado en el Administrador de tareas). |
 | `Get-DiscosVirtuales` | Los `.vhdx` de WSL (`HKCU\...\Lxss`) y `docker_data.vhdx`. |
 | `Test-DockerActivo`, `Get-ImagenesDockerSinUso`, `ConvertFrom-TamanoDocker` | Paso 11. |
-| `Get-AppsDesactualizadas` | Lee la tabla de `winget upgrade` por la posición de los títulos (funciona en cualquier idioma). |
+| `Invoke-Wsl`, `Get-DistrosApt`, `Get-CacheApt`, `Update-PaquetesWsl`, `Update-PaquetesAptInstalados`, `ConvertFrom-SimulacionApt` | Paso 12. `Invoke-Wsl` ejecuta como root con `LC_ALL=C`, `DEBIAN_FRONTEND=noninteractive` y `NEEDRESTART_MODE=l`, y captura la salida en UTF-8. |
+| `Get-AppsDesactualizadas`, `ConvertFrom-TablaWinget` | Llama a `winget upgrade`; la segunda lee la tabla por la posición de los títulos (funciona en cualquier idioma). |
+
+Regla: la lectura de la salida de un programa externo va en una función `ConvertFrom-*` aparte, que recibe las líneas (y el código de salida) y no llama a nada. Así se prueba con muestras (8.4) sin ejecutar el programa.
 
 ### 4.5 Configuración (al inicio de `limpiar.ps1`)
 
 | Variable | Valor | Uso |
 |---|---|---|
-| `$maxPuntos` | 2 | Puntos de restauración que conserva el paso 14 (borra los más viejos con `srclient.dll!SRRemoveRestorePoint`). |
+| `$maxPuntos` | 2 | Puntos de restauración que conserva el paso 15 (borra los más viejos con `srclient.dll!SRRemoveRestorePoint`). |
 | `$horasTemporales` | 24 | Antigüedad mínima para borrar en los pasos 1 y 2. |
 | `$diasVolcados` | 7 | Si hubo un pantallazo azul en estos días, el paso 7 conserva los volcados. |
 | `$diasRestosActualizacion` | 10 | Los restos de una actualización grande solo se ofrecen borrar pasado este tiempo. |
 
-También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizables` (paso 15).
+También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizables` (paso 16).
 
 ---
 
@@ -180,6 +197,7 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
 - `[math]::Max([double]0, ...)`: `Max(0, x)` usa la versión de Int32 y falla con valores de más de 2 GB.
 - La salida de winget es UTF-8: poner `[Console]::OutputEncoding` en UTF8 mientras se captura. La de sfc es UTF-16 (`Invoke-Herramienta -Unicode`).
 - Un `PSCustomObject` suelto no tiene `.Count` en PS 5.1: envolver en `@(...)`.
+- **Nunca `| Select-Object -First` sobre la salida de `wsl.exe`** (ni de otro programa nativo que cambie el modo de la consola): corta la tubería y mata el proceso antes de que restaure la consola. El 26/11/2026, en `Get-CacheApt`, dejó los saltos de línea sin volver al inicio y todo lo que siguió en pantalla salió en escalera (el log quedó bien, con `TerminatingError(): "The pipeline has been stopped."`). Usar `@(...)[0]`.
 
 ### 6.2 Log (`limpieza.log`)
 
@@ -193,8 +211,8 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
 
 - Tamaños con `Format-Tamano` (GB desde 1000 MB): con el separador de miles de es-CO, "1.010 MB" se lee como 1 MB.
 - **Por el espacio libre del disco**, cuando el tamaño de los archivos no refleja lo real: Delivery Optimization (paso 8; el tamaño aparente es mucho mayor que lo que ocupa), Liberador de espacio y DISM (paso 9).
-- **Por lo que achicó el archivo** en la compactación (paso 12): `wsl --shutdown` hace que Windows borre `swap.vhdx` de `%TEMP%` segundos después, y el espacio libre lo contaba de más (~1,2 GB el 2026-11-17).
-- **Docker** (paso 11): lo que libera queda dentro de `docker_data.vhdx` y solo vuelve a Windows al compactar. Se muestra aparte y **no** se suma a `$total` (la compactación ya lo cuenta). Por eso el paso 11 va justo antes del 12.
+- **Por lo que achicó el archivo** en la compactación (paso 13): `wsl --shutdown` hace que Windows borre `swap.vhdx` de `%TEMP%` segundos después, y el espacio libre lo contaba de más (~1,2 GB el 2026-11-17).
+- **Docker** (paso 11): lo que libera queda dentro de `docker_data.vhdx` y solo vuelve a Windows al compactar. Se muestra aparte y **no** se suma a `$total` (la compactación ya lo cuenta). Lo mismo con `apt-get clean` en WSL (paso 12). Por eso los pasos 11 y 12 van antes del 13.
 
 ### 6.4 Por paso
 
@@ -208,11 +226,12 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
   - se espera con `WaitForExit` y un tiempo máximo de 20 min, no con `Start-Process -Wait`, que también espera a los procesos que el Liberador deje abiertos;
   - al inicio del script se llama a `Remove-PerfilLiberador`. Los restos solo se preguntan si ninguno es más nuevo que `$diasRestosActualizacion` y suman más de 100 MB. Error `0x800f0806` de DISM = hay operaciones pendientes: reiniciar y volver a ejecutar.
 - **11:** sin preguntar, solo los cuatro `prune` sin riesgo (contenedores, imágenes huérfanas, caché de compilación, redes). Las imágenes sin usar solo se borran con S y solo las que se listaron, por nombre (`docker rmi <tag>`). **Nunca `docker volume prune`.**
-- **12:** primero `fstrim`: `fstrim -a` en las distribuciones normales y `fstrim /mnt/docker-desktop-disk` en `docker-desktop` (solo con Docker Desktop abierto). Sin ese paso, 1,3 GB de imágenes borradas nunca volvieron a Windows. Docker Desktop se vuelve a abrir con `explorer.exe`, para que no herede el permiso de administrador. Si `diskpart compact` falla, se ejecuta `detach vdisk` para no dejar el disco conectado.
+- **12:** solo distros con `/usr/bin/apt-get`; las `docker-desktop*` nunca. `apt-get update --allow-releaseinfo-change-label` (solo la etiqueta: el 25/11/2026 el PPA `ondrej/php` pasó a "PPA for PHP (deprecated)" y apt se detenía). No ampliarlo a `--allow-releaseinfo-change`: un cambio de origen, versión o codename merece que lo mire una persona. La lista de paquetes sale de `apt-get -s upgrade` (`Inst pkg [vieja] (nueva`), y los retenidos de "N not upgraded" (en Ubuntu suelen ser actualizaciones escalonadas, no un problema). `apt-get upgrade -y -o Dpkg::Options::=--force-confold` y `DPkg::Lock::Timeout=120`. De la salida de apt solo van al log `E:`/`W:`/`dpkg:` y el total. `apt-get clean` corre aunque el update falle; si falla, el error real de apt (`E:`) va al resumen.
+- **13:** primero `fstrim`: `fstrim -a` en las distribuciones normales y `fstrim /mnt/docker-desktop-disk` en `docker-desktop` (solo con Docker Desktop abierto). Sin ese paso, 1,3 GB de imágenes borradas nunca volvieron a Windows. Docker Desktop se vuelve a abrir con `explorer.exe`, para que no herede el permiso de administrador. Si `diskpart compact` falla, se ejecuta `detach vdisk` para no dejar el disco conectado.
 - **8:** `Delete-DeliveryOptimizationCache` escribe "Deleting..." con `Write-Host`. En PS 5.1 el transcript registra `Write-Host` aunque se redirija (`6>$null` y `*>$null` no sirven, probado el 25/11/2026), así que se ejecuta en otro `powershell.exe` y se usa su código de salida.
-- **13:** `Optimize-Volume -ReTrim` solo dice `Failed`; el motivo se lee del evento 264 de `Microsoft-Windows-Defrag` (Application) y va a `$trimError`, que el resumen muestra como `AVISO`. Nunca registrar "TRIM terminado" si falló. Caso real del 25/11/2026: `0x89000015`, el volumen tiene el bit de "revisar" puesto por una reparación pendiente (ver 16), y Windows no hace TRIM hasta que se repare.
-- **15:** `$estadoWinget` (`ok`, `al dia`, `no instalado`, `error (codigo N)`). "Al día" solo cuando winget sale con 0 o -1978335212; nunca a partir de una lista vacía. `$appsAutoactualizables` (App Installer, Edge, Spotify) sale como "Se actualizan solas". `$seActualizo` decide qué presentación usa el resumen, no si algo se actualizó. Si winget dice que instaló una app pero la sigue listando, cuenta como fallida.
-- **16:** la búsqueda de Windows Update tarda; las fechas de su historial vienen en UTC (`ToLocalTime()`). WinRE se lee solo de la línea de estado de `reagentc /info` (`Get-EstadoWinRE`). Respaldo: si Documentos y Escritorio no están en OneDrive ni en el Historial de archivos, sale como `INFO`, no como `AVISO` (lo decidió el usuario el 25/11/2026: en su PC es así a propósito). `Repair-Volume -Scan` no es solo lectura: NTFS corrige en línea lo que puede (eventos 130 de `Ntfs` en System) y deja para `chkdsk /spotfix` lo que necesita C: libre. Niveles: corregido en línea → `OK`; necesita SpotFix → `INFO`; cualquier otro error → `AVISO` (`chkdsk C: /f`). Lo que necesita SpotFix es menor por definición (entradas de índice, vínculos) y el estado del disco se vigila aparte con sus contadores. Caso real del 25/11/2026: quedó pendiente una entrada `$I30` de `\Windows\Prefetch`, pero en esa versión de prueba de Windows (26300) no abrían `chkdsk.exe`, `chkntfs.exe` ni `autofmt.exe` ("Acceso denegado" aun como admin), y `Repair-Volume -SpotFix` / `-OfflineScanAndFix` devolvían `Failed`. Como `AVISO` se habría repetido en cada ejecución sin poder resolverse. El detalle sale del informe de la revisión (Application, proveedor `Chkdsk`, evento 26226) y va al log; para más contexto, ver los eventos 98 y 130 de `Ntfs`.
+- **14:** `Optimize-Volume -ReTrim` solo dice `Failed`; el motivo se lee del evento 264 de `Microsoft-Windows-Defrag` (Application) y va a `$trimError`, que el resumen muestra como `AVISO`. Nunca registrar "TRIM terminado" si falló. Caso real del 25/11/2026: `0x89000015`, el volumen tiene el bit de "revisar" puesto por una reparación pendiente (ver 17), y Windows no hace TRIM hasta que se repare.
+- **16:** `$estadoWinget` (`ok`, `al dia`, `no instalado`, `error (codigo N)`). "Al día" solo cuando winget sale con 0 o -1978335212; nunca a partir de una lista vacía. `$appsAutoactualizables` (App Installer, Edge, Spotify) sale como "Se actualizan solas". `$seActualizo` decide qué presentación usa el resumen, no si algo se actualizó. Si winget dice que instaló una app pero la sigue listando, cuenta como fallida.
+- **17:** la búsqueda de Windows Update tarda; las fechas de su historial vienen en UTC (`ToLocalTime()`). WinRE se lee solo de la línea de estado de `reagentc /info` (`Get-EstadoWinRE`). Respaldo: si Documentos y Escritorio no están en OneDrive ni en el Historial de archivos, sale como `INFO`, no como `AVISO` (lo decidió el usuario el 25/11/2026: en su PC es así a propósito). `Repair-Volume -Scan` no es solo lectura: NTFS corrige en línea lo que puede (eventos 130 de `Ntfs` en System) y deja para `chkdsk /spotfix` lo que necesita C: libre. Niveles: corregido en línea → `OK`; necesita SpotFix → `INFO`; cualquier otro error → `AVISO` (`chkdsk C: /f`). Lo que necesita SpotFix es menor por definición (entradas de índice, vínculos) y el estado del disco se vigila aparte con sus contadores. Caso real del 25/11/2026: quedó pendiente una entrada `$I30` de `\Windows\Prefetch`, pero en esa versión de prueba de Windows (26300) no abrían `chkdsk.exe`, `chkntfs.exe` ni `autofmt.exe` ("Acceso denegado" aun como admin), y `Repair-Volume -SpotFix` / `-OfflineScanAndFix` devolvían `Failed`. Como `AVISO` se habría repetido en cada ejecución sin poder resolverse. El detalle sale del informe de la revisión (Application, proveedor `Chkdsk`, evento 26226) y va al log; para más contexto, ver los eventos 98 y 130 de `Ntfs`.
 
 ---
 
@@ -227,7 +246,7 @@ Antes de agregar algo, comprobar que respeta la sección 2.2 y los principios de
 
 ### 7.2 Agregar un paso nuevo
 1. Preferir ampliar un paso existente: renumerar obliga a tocar el README, los mensajes y esta guía.
-2. Si es necesario, numerarlo, agregarle `Log "Paso N: ..." Yellow` y ubicarlo dentro o fuera de `if ($esAdmin)`. Actualizar el mensaje "Pasos X a Y omitidos" y la sección "Sin permisos de administrador" del README.
+2. Si es necesario, numerarlo, agregarle `Log "Paso N: ..." Yellow`. Corre siempre como administrador: no hace falta agruparlo.
 
 ### 7.3 Agregar una pregunta
 1. Reunir los datos antes de las preguntas y agregar la entrada a `$preguntas`, solo si aplica (umbral de tamaño, programa abierto, etc.).
@@ -248,23 +267,18 @@ Una variable al inicio de `limpiar.ps1`, con un comentario en la misma línea, m
 ## 8. Mantenimiento y verificación
 
 ### 8.1 Antes de dar un cambio por terminado
-1. Revisión de sintaxis de `limpiar.ps1` y de cada `lib\*.ps1` (8.2).
-2. Revisión de solo ASCII (debe dar 0).
-3. Probar las funciones nuevas en solo lectura (8.2), sin ejecutar el script.
+1. `verificar.ps1` sin fallos: sintaxis, solo ASCII y pruebas (8.2). El hook de pre-commit lo corre solo; no saltarlo con `--no-verify`.
+2. Si el cambio agrega o modifica lógica que se puede probar sin efectos (lectura de una salida, cálculo, borrado dentro de una carpeta), agregar o ajustar su prueba (8.4).
+3. Probar en solo lectura (8.2), sin ejecutar el script, las funciones nuevas que no tienen prueba.
 4. Si cambió el resumen o el correo: vista previa en el navegador, también en tamaño celular.
 5. README actualizado (sección 3) y este archivo (sección 9).
 6. Contarle al usuario qué no se pudo probar sin una ejecución real (normalmente, lo que necesita permisos de administrador).
 
 ### 8.2 Comandos
 
-Sintaxis, sin ejecutar nada (en `limpiar.ps1` y en cada `lib\*.ps1`):
+Sintaxis, solo ASCII y pruebas, sin ejecutar la limpieza (tarda unos segundos):
 ```powershell
-$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("$PWD\limpiar.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e } else { "Sintaxis OK" }
-```
-
-Solo ASCII (debe imprimir 0):
-```powershell
-@(Select-String -Path limpiar.ps1, lib\*.ps1 -Pattern '[^\x00-\x7F]').Count
+powershell -NoProfile -ExecutionPolicy Bypass -File verificar.ps1
 ```
 
 Probar una función de `limpiar.ps1` por separado (extraerla del AST y cargarla):
@@ -292,6 +306,15 @@ Get-Content limpieza.log | Where-Object { $_ -notmatch '^\[\d\d:\d\d:\d\d\]   (b
 - Ver si algún aviso del resumen es un falso positivo; si lo es, ajustar el umbral y registrar el caso real en 6.4.
 - Lo que se aprenda de una ejecución real (números, errores nuevos) va a la sección 6 con la fecha.
 
+### 8.4 Pruebas (`tests\`)
+- **Pester 3.4**, el que viene con Windows: sintaxis `Should Be`, no `Should -Be` (esa es de Pester 4+). `verificar.ps1` usa la versión 3 o 4 más nueva que haya, así que instalar Pester 5 no las rompe.
+- Cada `*.Tests.ps1` empieza con `. (Join-Path $PSScriptRoot 'cargar.ps1')`. Las pruebas también son `.ps1`: **solo ASCII**.
+- **Nunca tocar carpetas reales:** lo que borra trabaja en `$TestDrive` (carpeta temporal de Pester). Para .NET (`[IO.File]`) usar `"$TestDrive\..."`, no `TestDrive:\`, que .NET no entiende.
+- No probar lo que necesita administrador, red o programas externos (winget, wsl, docker, el registro): se prueba su función `ConvertFrom-*` con una muestra (4.4).
+- Muestras en `tests\muestras`, en UTF-8 y con apps o paquetes genéricos: **nunca** copiar una salida de este PC con nombres de proyectos, rutas o el nombre del equipo (repo público).
+- `reglas.Tests.ps1` revisa el código **sin comentarios** contra la lista de 2.2 y las trampas de 6.1/6.2 (`volume prune`, `full-upgrade`, `-NoNewline`...), y que sin administrador se salga antes del log (4.2). Si el usuario autoriza algo de 2.2, se quita su patrón ahí en el mismo cambio. Si se agrega algo a 2.2, se agrega su patrón.
+- Una prueba que se escribe y pasa a la primera no prueba nada hasta que se la ve fallar: romper la función a propósito, ver que la prueba falla y deshacer el cambio. Así se hizo el 2026-11-26 con `Clear-Folder` y la regla de `volume prune`.
+
 ---
 
 ## 9. Reglas para escribir este archivo
@@ -305,3 +328,60 @@ Get-Content limpieza.log | Where-Object { $_ -notmatch '^\[\d\d:\d\d:\d\d\]   (b
 - **No incluir datos personales ni secretos** (repositorio público): ni la API key, ni correos, ni el nombre del equipo, ni rutas del usuario.
 - **Si algo deja de ser cierto, se borra o se corrige**; no se acumulan notas viejas. La historia de los cambios va en el README ("Historial de cambios"), no aquí.
 - **Si se agrega una sección, conservar la numeración** y actualizar las referencias cruzadas ("ver 6.3").
+
+---
+
+## 10. Reglas para escribir el `README.md`
+
+El README es para **quien usa el script en su propio equipo**, sin saber nada del código ni de este PC. El objetivo es que funcione en otros equipos, no solo en este (lo pidió el usuario el 2026-11-26).
+
+### 10.1 Estructura
+
+Orden fijo de las secciones (`##`). Si se agrega una, va en el lugar que le corresponde por tema, no al final:
+
+| # | Sección | Contenido |
+|---|---|---|
+| 1 | Archivos | Tabla de todos los archivos del repo y de los que se generan |
+| 2 | Requisitos | Qué necesita el equipo |
+| 3 | Instalación en otro equipo | Qué ocupa, pasos y qué se copia entre equipos |
+| 4 | Cómo usarlo | Ejecución diaria |
+| 5-6 | Preguntas, Pasos (con "Resumen final" como `###`) | Qué hace el script (igual a 2.1 y al código) |
+| 7-11 | Correo, Sin permisos de administrador, Configuración, Recomendaciones, Lo que no hace | Referencia |
+| 12 | Si modificas el script | Solo para desarrollo: clonar, hook, comandos de las pruebas |
+| 13 | Historial de cambios | `- **AAAA-MM-DD** - texto`, el más reciente arriba |
+
+- Hoy va **sin tildes** (todo ASCII): mantener ese estilo en lo que se agregue.
+- Tablas para inventarios (archivos, campos, comandos), pasos numerados para lo que se hace en orden, bloques de código para los comandos que se copian.
+- Sin datos de este PC (repositorio público): ni rutas del usuario, ni el nombre del equipo, ni correos reales. Ejemplos genéricos (`C:\Herramientas\...`, `tu-correo@ejemplo.com`).
+
+### 10.2 "Requisitos" e "Instalación en otro equipo" siempre al día
+
+Es lo primero que lee alguien que lo instala en otro equipo, y un dato viejo ahí hace que falle sin que se entienda por qué. Revisar estas dos secciones en **cada** cambio, aunque parezca que no las toca:
+
+| Si el cambio... | Actualizar |
+|---|---|
+| Necesita un programa, versión, permiso o configuración de Windows nueva | Requisitos |
+| Agrega un archivo que el usuario tiene que crear, copiar o llenar (como `correo.json`) | Pasos (con el comando para crearlo y una tabla de sus campos), "Qué se copia" y `.gitignore` |
+| Cambia el formato de `correo.json` | La tabla de campos, `correo.ejemplo.json` y la sección Correo |
+| Genera un archivo nuevo, o cambia lo que ocupa uno que ya existe | "Qué ocupa en el equipo" (con el tamaño aproximado) |
+| Deja algo en el equipo (registro, tarea, servicio, perfil temporal) | "Qué ocupa" y la frase "No crea servicios ni tareas..." si deja de ser cierta |
+| Agrega una herramienta de desarrollo (pruebas, analizador) | "Si modificas el script" |
+
+Las tablas de estas secciones se comprueban contra el repo de verdad (`git ls-files`, el tamaño de los archivos, los comandos ejecutados), no de memoria.
+
+---
+
+## 11. Memoria de Claude Code
+
+La memoria del proyecto está en dos carpetas. Las reglas (qué va en cada una, formato, crecimiento) están en `memory-global/REGLAS-MEMORIA.md`.
+
+| Carpeta | Qué guarda | ¿Se sube? | La carga |
+|---|---|---|---|
+| `memory-global/` | Reglas y decisiones que valen en cualquier PC, **sin datos privados** (este repo es público) | Sí | Este archivo (abajo) |
+| `memory-local/` | Lo de cada PC: cuentas de git, remotos, datos privados | No (`.git/info/exclude`) | `CLAUDE.local.md` |
+
+Un `@memory-global/...` por memoria global. Si una no está aquí, no se carga en las sesiones siguientes.
+
+@memory-global/MEMORY.md
+@memory-global/REGLAS-MEMORIA.md
+@memory-global/DOCUMENTACION-AL-DIA.md
