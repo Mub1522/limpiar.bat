@@ -115,9 +115,9 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 4. Define las funciones de apoyo y la configuración.
 5. **Inicio:** recuadro (`Write-CajaConsola`), reúne los datos que necesitan las preguntas y arma `$preguntas`, solo con las que aplican ahora. Cada pregunta tiene `Clave`, `Titulo` y `Detalle`.
 6. **Preguntas:** se muestran como tarjetas numeradas (`[2/6]`) con `Read-SiNo`: S/si/N/no; Enter sin nada no vale y se vuelve a preguntar (lo pidió el usuario el 2026-11-26: hay que elegir); `T`/`todas` = sí a esa y a las que faltan (las tarjetas siguientes se muestran igual, con `-> SI (todas)`, para que el usuario vea qué aceptó y quede en el log), y vuelve a preguntar si la respuesta no es válida. La lectura de la respuesta está en `ConvertFrom-RespuestaSiNo` (con prueba). Como `Read-Host` no queda en el transcript, `Read-SiNo` repite `-> SI` / `-> NO` en su propia línea. Las respuestas van a `$respuestas[Clave]` y se pasan a `$cerrarNav`, `$cerrarApp`, `$borrarRestos`, `$hacerDism`, `$hacerReparacion`, `$borrarImagenesDocker`, `$actualizarWsl`, `$hacerCompactar`, `$hacerActualizar`, `$borrarNuget` y `$borrarLogsPm2`.
-7. **Pasos 1 a 17**, sin intervención y siempre como administrador. A `Get-SaludEquipo` y `Show-Resumen` se les pasa `$true`: los módulos de `lib\` siguen aceptando `$false` para la vista previa sin permisos (8.2).
+7. **Pasos 1 a 17**, sin intervención y siempre como administrador, con la edición rápida de la consola apagada (ver 6.1). A `Get-SaludEquipo` y `Show-Resumen` se les pasa `$true`: los módulos de `lib\` siguen aceptando `$false` para la vista previa sin permisos (8.2).
 8. `Show-Resumen` (con un hashtable que incluye `Salud`, del paso 17, y `Tendencia`), después `Add-Ejecucion` al historial (después del resumen, para incluir la cantidad de avisos) y después el correo.
-9. `Stop-Transcript`. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
+9. `Stop-Transcript` y se devuelve el modo de la consola. Se descarta lo que se tecleó durante la ejecución y **solo Enter cierra la ventana**, para que el resumen quede a la vista.
 
 ### 4.3 Módulos de `lib\`
 
@@ -158,6 +158,7 @@ Estas cosas se rechazaron a propósito. **No se agregan aunque parezcan útiles*
 | `Get-DiscosVirtuales` | Los `.vhdx` de WSL (`HKCU\...\Lxss`) y `docker_data.vhdx`. |
 | `Test-DockerActivo`, `Get-ImagenesDockerSinUso`, `ConvertFrom-TamanoDocker` | Paso 11. |
 | `Invoke-Wsl`, `Get-DistrosApt`, `Get-CacheApt`, `Update-PaquetesWsl`, `Update-PaquetesAptInstalados`, `ConvertFrom-SimulacionApt` | Paso 12. `Invoke-Wsl` ejecuta como root con `LC_ALL=C`, `DEBIAN_FRONTEND=noninteractive` y `NEEDRESTART_MODE=l`, y captura la salida en UTF-8. |
+| `Disable-EdicionRapida`, `Restore-ModoConsola`, `Get-ModoSinEdicionRapida` | Apagan y devuelven la edición rápida de la consola mientras corre la limpieza (ver 6.1). |
 | `Get-AppsDesactualizadas`, `ConvertFrom-TablaWinget` | Llama a `winget upgrade`; la segunda lee la tabla por la posición de los títulos (funciona en cualquier idioma). |
 
 Regla: la lectura de la salida de un programa externo va en una función `ConvertFrom-*` aparte, que recibe las líneas (y el código de salida) y no llama a nada. Así se prueba con muestras (8.4) sin ejecutar el programa.
@@ -198,6 +199,7 @@ También van ahí las listas `$navegadores`, `$appsChat` y `$appsAutoactualizabl
 - La salida de winget es UTF-8: poner `[Console]::OutputEncoding` en UTF8 mientras se captura. La de sfc es UTF-16 (`Invoke-Herramienta -Unicode`).
 - Un `PSCustomObject` suelto no tiene `.Count` en PS 5.1: envolver en `@(...)`.
 - **Nunca `| Select-Object -First` sobre la salida de `wsl.exe`** (ni de otro programa nativo que cambie el modo de la consola): corta la tubería y mata el proceso antes de que restaure la consola. El 26/11/2026, en `Get-CacheApt`, dejó los saltos de línea sin volver al inicio y todo lo que siguió en pantalla salió en escalera (el log quedó bien, con `TerminatingError(): "The pipeline has been stopped."`). Usar `@(...)[0]`.
+- **Edición rápida (QuickEdit) de la consola:** un clic en la ventana la pone en "Seleccionar" y el siguiente `Write-Host` se bloquea hasta Enter o Esc, así que todo el script se detiene sin avisar. El 26/11/2026 quedó 10 minutos parado en el paso 17: en el log se ve como un hueco de horas entre dos líneas seguidas (23:55:22 → 00:05:16). Por eso `Disable-EdicionRapida` la apaga después de las preguntas (bit `0x40` fuera, `0x80` puesto, o Windows ignora el cambio) y `Restore-ModoConsola` devuelve el modo original después de `Stop-Transcript`, para poder copiar el resumen (principio 8). `reglas.Tests.ps1` comprueba los bits y el orden.
 
 ### 6.2 Log (`limpieza.log`)
 

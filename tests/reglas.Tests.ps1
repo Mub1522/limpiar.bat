@@ -71,3 +71,24 @@ Describe 'Sin permisos de administrador no se hace nada' {
         $principal | Should Not Match 'if \(\$esAdmin\)'
     }
 }
+
+Describe 'Un clic en la ventana no detiene la limpieza (edicion rapida, CLAUDE.md 6.1)' {
+    It 'quita la edicion rapida (0x40), marca las opciones extendidas (0x80) y no toca lo demas' {
+        Get-ModoSinEdicionRapida 0x1F7 | Should Be 0x1B7
+        Get-ModoSinEdicionRapida 0x07 | Should Be 0x87
+    }
+
+    $principal = [IO.File]::ReadAllText((Join-Path $script:raizProyecto 'limpiar.ps1'))
+    $posicion = { param($patron) [regex]::Match($principal, $patron).Index }
+
+    It 'la apaga despues de las preguntas y antes del paso 1' {
+        $apaga = & $posicion '(?m)^\$modoConsola = Disable-EdicionRapida'
+        ($apaga -gt (& $posicion 'Read-SiNo \$preguntas')) | Should Be $true
+        ($apaga -lt (& $posicion '(?m)^Log "Paso 1:')) | Should Be $true
+    }
+    It 'la devuelve despues del log y antes de esperar el Enter' {
+        $devuelve = & $posicion '(?m)^Restore-ModoConsola \$modoConsola'
+        ($devuelve -gt (& $posicion '(?m)^Stop-Transcript')) | Should Be $true
+        ($devuelve -lt (& $posicion 'ReadKey\(')) | Should Be $true
+    }
+}

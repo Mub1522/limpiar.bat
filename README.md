@@ -93,6 +93,8 @@ Mientras corre, el paso 9 usa un perfil temporal del Liberador de espacio de Win
 3. Responde las preguntas del inicio.
 4. Espera a que aparezca el resumen y presiona **Enter** para cerrar. Ninguna otra tecla cierra la ventana, y las teclas presionadas durante la ejecucion se descartan.
 
+Despues de las preguntas, la seleccion con el mouse queda desactivada hasta el final. En la consola de Windows, un clic en la ventana la pone en modo "Seleccionar" y detiene la limpieza hasta presionar Enter o Esc. Al terminar se vuelve a activar, para poder copiar el resumen.
+
 ## Preguntas (todas al inicio)
 
 Al abrirse, el script muestra un encabezado (equipo y fecha) y luego las preguntas, cada una en su tarjeta numerada (`[1/6]`, `[2/6]`...) con una explicacion corta debajo. Solo aparecen las que aplican en ese momento. Despues de responderlas el script corre solo, sin pedir nada mas.
@@ -276,6 +278,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-27** - Un clic en la ventana ya no detiene la limpieza: mientras corre se desactiva la seleccion con el mouse (edicion rapida de la consola) y al final se vuelve a activar. En una ejecucion real, la limpieza quedo 10 minutos parada en el paso 17 hasta que se presiono Enter.
 - **2026-11-26** - Nueva seccion "Reparar el disco" (en Recomendaciones de uso): que hacer cuando el resumen muestra un error del sistema de archivos o el TRIM bloqueado, incluido el modo de recuperacion cuando `chkdsk` no funciona dentro de Windows. El resumen remite a esa seccion y el log deja los pasos.
 - **2026-11-26** - Tras la primera ejecucion real de esta version: el paso 16 ya no intenta actualizar VS Code si esta abierto (su instalador se cancelaba y el resumen mostraba como motivo la ruta de un log); ahora sale en "Se actualizan solas" con el motivo. El paso 10 muestra la fecha del punto de restauracion como dia/mes.
 - **2026-11-26** - Sin permisos de administrador el script ya no hace una limpieza a medias: avisa y se cierra sin tocar nada (ni el log, ni el historial, ni el correo). Por eso ya no hay casos con una sola pregunta.

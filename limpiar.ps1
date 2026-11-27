@@ -27,6 +27,37 @@ function Log($msg, $color = 'Gray') {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -ForegroundColor $color
 }
 
+# Edicion rapida (QuickEdit) de la consola: un clic en la ventana la pone en "Seleccionar" y el
+# siguiente Write-Host se queda esperando hasta Enter o Esc, asi que la limpieza se detiene sin avisar
+# (el 26/11/2026 quedo 10 minutos parada en el paso 17). Se apaga mientras corre y se devuelve al final.
+# 0x40 = ENABLE_QUICK_EDIT_MODE; 0x80 = ENABLE_EXTENDED_FLAGS (sin ella Windows ignora el cambio).
+function Get-ModoSinEdicionRapida([uint32]$modo) {
+    return [uint32](($modo -bor 0x80) -band (-bnot 0x40))
+}
+
+# Devuelve el modo que tenia la consola (para Restore-ModoConsola) o $null si no se pudo cambiar
+function Disable-EdicionRapida {
+    try {
+        if (-not ('Limpieza.Consola' -as [type])) {
+            Add-Type -Namespace Limpieza -Name Consola -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@
+        }
+        $entrada = [Limpieza.Consola]::GetStdHandle(-10)
+        $modo = [uint32]0
+        if (-not [Limpieza.Consola]::GetConsoleMode($entrada, [ref]$modo)) { return $null }
+        if (-not [Limpieza.Consola]::SetConsoleMode($entrada, (Get-ModoSinEdicionRapida $modo))) { return $null }
+        return $modo
+    } catch { return $null }
+}
+
+function Restore-ModoConsola($modo) {
+    if ($null -eq $modo) { return }
+    try { [void][Limpieza.Consola]::SetConsoleMode([Limpieza.Consola]::GetStdHandle(-10), [uint32]$modo) } catch { }
+}
+
 # Tamano legible: en GB desde 1000 MB, porque "1.010 MB" se confunde con 1 MB por el separador de miles
 function Format-Tamano($bytes) {
     if ($bytes -ge 1000MB) { return '{0:N2} GB' -f ($bytes / 1GB) }
@@ -600,6 +631,13 @@ $borrarLogsPm2        = [bool]$respuestas['pm2']
 
 Write-SeccionConsola 'LIMPIEZA EN CURSO'
 Log "Todo listo: puedes dejar la ventana y volver cuando aparezca el resumen." Cyan
+# Desde aqui nadie escribe en la ventana: un clic ya no puede detener la limpieza (ver Disable-EdicionRapida)
+$modoConsola = Disable-EdicionRapida
+if ($null -ne $modoConsola) {
+    Log "Seleccion con el mouse desactivada hasta el final (un clic en la ventana ya no detiene la limpieza)" DarkGray
+} else {
+    Log "No se pudo desactivar la seleccion con el mouse: no hagas clic en la ventana; si su titulo dice 'Seleccionar', presiona Esc" DarkYellow
+}
 # Si una ejecucion anterior se corto en medio del Liberador de espacio (paso 9), su perfil temporal quedo puesto
 $marcasViejas = @(Remove-PerfilLiberador)
 if ($marcasViejas) {
@@ -1273,6 +1311,8 @@ try {
 }
 Log "Log completo: $logFile" DarkGray
 Stop-Transcript | Out-Null
+# Ya no se escribe nada mas: se devuelve la seleccion con el mouse para poder copiar el resumen
+Restore-ModoConsola $modoConsola
 
 Write-Host ""
 # Descartar teclas presionadas durante la ejecucion, para que no cierren la ventana solas
