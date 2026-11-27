@@ -47,6 +47,47 @@ Describe 'Write-Dato' {
     }
 }
 
+Describe 'Get-NombresTablaApps' {
+    $app = { param($n, $id) [pscustomobject]@{ Nombre = $n; Id = $id } }
+
+    It 'recorta el nombre largo en vez de cambiarlo por el Id' {
+        $r = Get-NombresTablaApps @(& $app 'Microsoft Visual Studio Code (User) edicion larga' 'Microsoft.VisualStudioCode'; & $app 'Git' 'Git.Git') 20
+        $r[0] | Should Be 'Microsoft Visual...'
+        $r[1] | Should Be 'Git'
+    }
+    It 'usa el Id solo si dos nombres recortados quedan iguales' {
+        $r = Get-NombresTablaApps @(& $app 'Microsoft Visual C++ 2013 x64' 'VC2013.x64'; & $app 'Microsoft Visual C++ 2013 x86' 'VC2013.x86') 20
+        $r[0] | Should Be 'VC2013.x64'
+        $r[1] | Should Be 'VC2013.x86'
+    }
+}
+
+Describe 'Format-Duracion' {
+    It 'minutos por debajo de 1 h y horas con minutos por encima' {
+        Format-Duracion 2700 | Should Be '45 min'
+        Format-Duracion 12043 | Should Be '3 h 21 min'
+        Format-Duracion 10 | Should Be '1 min'
+    }
+}
+
+Describe 'Get-NotaEspacioBaja' {
+    It 'no dice nada si el espacio libre no bajo' {
+        Get-NotaEspacioBaja @{ LibreInicio = 50GB; LibreFin = 51GB } | Should BeNullOrEmpty
+    }
+    It 'explica la baja con los puntos de restauracion y las apps actualizadas (caso del 27/11/2026)' {
+        $nota = Get-NotaEspacioBaja @{ LibreInicio = 52GB; LibreFin = 46.5GB; PuntosInicio = 0; PuntosFin = 3GB
+            AppsActualizadas = @(1..13 | ForEach-Object { [pscustomobject]@{ Nombre = "app$_" } }) }
+        $nota | Should Match 'puntos de restauracion crecieron 3[.,]00 GB'
+        $nota | Should Match 'se actualizaron 13 app'
+    }
+    It 'sin la medida de los puntos (sin permisos) no los nombra' {
+        $nota = Get-NotaEspacioBaja @{ LibreInicio = 52GB; LibreFin = 46GB; PuntosInicio = $null; PuntosFin = $null; AppsActualizadas = @() }
+        $nota | Should Not Match 'puntos'
+        $nota | Should Not Match 'actualizaron'
+        $nota | Should Match 'Windows Update'
+    }
+}
+
 Describe 'Format-Ancho' {
     It 'rellena hasta el ancho' {
         (Format-Ancho 'Git' 10).Length | Should Be 10

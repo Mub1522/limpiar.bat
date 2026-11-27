@@ -105,6 +105,19 @@ Describe 'Duracion de los pasos en el historial (P3)' {
     }
 }
 
+Describe 'Get-PasosLargos' {
+    It 'devuelve los pasos de 1 h o mas, aunque no haya historial (caso del 27/11/2026: SFC 3 h 20 min)' {
+        $pasos = [ordered]@{ '1' = 1; '9' = 412; '10' = 12043; '16' = 3600 }
+        $r = @(Get-PasosLargos $pasos | Sort-Object Segundos -Descending)
+        $r.Count | Should Be 2
+        $r[0].Paso | Should Be 10
+        $r[1].Paso | Should Be 16
+    }
+    It 'nada si todos duran menos de 1 h' {
+        @(Get-PasosLargos ([ordered]@{ '10' = 3599 })).Count | Should Be 0
+    }
+}
+
 Describe 'Start-Paso y Stop-Paso (P3)' {
     It 'guarda cuanto tardo cada paso, por numero' {
         $script:duracionPasos = [ordered]@{}
