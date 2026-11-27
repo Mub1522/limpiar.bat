@@ -282,15 +282,15 @@ function Show-Resumen($d) {
         # Lo que necesita SpotFix es por definicion menor (una entrada de indice, un vinculo): no es un fallo del
         # disco, que se vigila aparte con sus contadores. Solo informa, para no repetir un aviso que a veces no se
         # puede resolver enseguida (25/11/2026: chkdsk.exe no abria en una version de prueba de Windows)
-        Write-Estado 'INFO' 'Sistema de archivos' "error menor pendiente (detalle en el log); se corrige con 'chkdsk C: /spotfix' como admin y reiniciando"
+        Write-Estado 'INFO' 'Sistema de archivos' "error menor pendiente; se repara a mano con 'chkdsk C: /spotfix' y reiniciando (pasos en el log y en el README, 'Reparar el disco')"
     }
     elseif ($salud.SistemaArchivos -match 'Fixed') { Write-Estado 'OK' 'Sistema de archivos' 'errores menores, ya corregidos en linea' }
-    else { Write-Estado 'AVISO' 'Sistema de archivos' "errores ($($salud.SistemaArchivos)): como admin, 'chkdsk C: /f' (S) y reiniciar" }
+    else { Write-Estado 'AVISO' 'Sistema de archivos' "errores ($($salud.SistemaArchivos)): se reparan a mano con 'chkdsk C: /f' y reiniciando (pasos en el log y en el README, 'Reparar el disco')" }
     # Solo si fallo: sin TRIM el SSD se va volviendo mas lento al escribir (ver log, paso 14)
     if ($d.TrimError) {
         $textoTrim = "no se pudo hacer: $($d.TrimError)"
         # 0x89000015: C: esta marcado para revisar y Windows no optimiza hasta que se repare
-        if ($d.TrimError -match '0x89000015') { $textoTrim = 'no se pudo hacer porque C: tiene una reparacion pendiente (linea anterior)' }
+        if ($d.TrimError -match '0x89000015') { $textoTrim = "no se pudo hacer: C: tiene una reparacion pendiente; vuelve a funcionar al reparar el disco (README, 'Reparar el disco')" }
         Write-Estado 'AVISO' 'TRIM del SSD' $textoTrim
     }
 

@@ -198,6 +198,17 @@ function Get-SaludEquipo($discoC, $esAdmin) {
                 @($informe.Message -split "`r?`n" | Where-Object { $_ -match '\$I30|\$FILE_NAME|\$MFT|\$Bitmap|cl.ster' } |
                     ForEach-Object { $_.Trim() } | Select-Object -Unique -First 5) | ForEach-Object { Log "    $_" DarkGray }
             }
+            # Lo que queda pendiente solo se repara con C: libre (reiniciando): el script no reinicia, asi
+            # que el log deja el proceso. El modo de recuperacion hizo falta el 26/11/2026: chkdsk.exe daba
+            # "Acceso denegado" y la reparacion al arrancar no terminaba nunca.
+            if ($sistemaArchivos -notmatch 'Fixed' -or $sistemaArchivos -match 'SpotFix') {
+                $comando = if ($sistemaArchivos -match 'SpotFix') { 'chkdsk C: /spotfix' } else { 'chkdsk C: /f' }
+                Log "  para repararlo (a mano, necesita reiniciar):" DarkYellow
+                Log "    1. PowerShell como administrador: $comando, responder S y reiniciar" DarkYellow
+                Log "    2. si chkdsk da 'Acceso denegado' o la reparacion al arrancar no termina: modo de recuperacion >" DarkYellow
+                Log "       Solucionar problemas > Opciones avanzadas > Simbolo del sistema > chkdsk C: /f (confirmar la letra con dir C:\Windows)" DarkYellow
+                Log "    3. comprobar: Repair-Volume -DriveLetter C -Scan debe decir NoErrorsFound (README, 'Reparar el disco')" DarkYellow
+            }
         }
     }
 

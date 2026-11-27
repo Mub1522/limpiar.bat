@@ -160,8 +160,8 @@ Se muestra en pantalla antes de cerrar, queda en el log y se envia por correo. E
 - **Espacio**: total liberado (en GB desde 1000 MB), espacio libre en C: antes y despues, la limpieza anterior (hace cuanto fue y cuanto libero) y cuanto se lleno el disco desde entonces, la **tendencia** (cuantos GB por mes se pierden aunque se limpie, calculada con las limpiezas de los ultimos 120 dias, cuando hay al menos 4 y 14 dias de historial, y en cuantos meses C: bajaria del 15 % libre; si el espacio libre sube, dice "no se esta llenando"), lo liberado dentro de Docker (y que imagenes se borraron), la cache de `apt` borrada en WSL y tamano de los discos virtuales compactados.
 - **Salud del equipo** (hardware):
   - Disco: estado, vida usada, temperatura y horas de uso del SSD. Aviso si la vida usada llega al 80 %, la temperatura a 80 C (un SSD NVMe trabaja normalmente a 60-75 C con carga, y se mide justo despues del TRIM) o si hay errores de lectura que el disco no pudo corregir (la senal mas clara de que esta fallando)
-  - Sistema de archivos: resultado de la revision del paso 17. Si Windows ya corrigio los errores en linea, sale OK. Si queda un error menor (por ejemplo, una entrada de indice de una carpeta), sale como informacion, con el detalle en el log y el comando para corregirlo (`chkdsk C: /spotfix` como administrador y reiniciar). Si necesita una revision completa, sale como aviso (`chkdsk C: /f`)
-  - TRIM del SSD: solo aparece si el TRIM del paso 14 fallo, como aviso y con el motivo
+  - Sistema de archivos: resultado de la revision del paso 17. Si Windows ya corrigio los errores en linea, sale OK. Si queda un error menor (por ejemplo, una entrada de indice de una carpeta), sale como informacion. Si necesita una revision completa, sale como aviso. En los dos casos se repara a mano: el log deja los pasos y estan en "Reparar el disco" (Recomendaciones de uso)
+  - TRIM del SSD: solo aparece si el TRIM del paso 14 fallo, como aviso y con el motivo. Si es por una reparacion pendiente del disco, vuelve a funcionar al repararlo ("Reparar el disco")
   - Espacio en C: GB libres y porcentaje (aviso por debajo del 15 %, cuando Windows y sus actualizaciones empiezan a tener problemas)
   - Bateria (solo portatiles): capacidad actual frente a la original y ciclos (aviso por debajo del 80 %)
   - Hardware (30 dias): errores de memoria RAM, CPU o disco que registra Windows (WHEA). Aviso si hay alguno grave o 10 o mas corregidos (unos pocos corregidos son normales)
@@ -224,6 +224,18 @@ Y el correo, en `correo.json` (ver arriba).
 - **Paquetes de WSL** (S): cada 2-4 semanas, junto con la limpieza normal; mejor sin nada importante corriendo dentro de Linux (un servicio que se actualiza puede reiniciarse). Conviene responder S tambien a compactar, para que vuelva a Windows lo que libera `apt-get clean`.
 - El paso 15 cuenta **todos** los puntos de restauracion, incluidos los creados a mano o por Windows Update.
 
+### Reparar el disco
+
+Si el resumen muestra "Sistema de archivos" con un error pendiente, o "TRIM del SSD" con una reparacion pendiente, hay que reparar C: **a mano**. Windows no puede reparar el disco donde esta corriendo: hay que reiniciar, y el script nunca reinicia el equipo. Mientras tanto, Windows tampoco hace el TRIM y puede mostrar "Reparando la unidad C" en cada arranque.
+
+1. En PowerShell **como administrador**: `chkdsk C: /spotfix` (o `chkdsk C: /f` si el resumen lo indica). Cuando pregunte si quieres programarlo para el proximo reinicio, responde **S** y reinicia.
+2. Si `chkdsk` responde "Acceso denegado", o la reparacion al arrancar no termina (vuelve a salir en cada arranque), hazlo desde el modo de recuperacion, que trae su propio `chkdsk`:
+   1. Configuracion > Sistema > Recuperacion > Inicio avanzado > **Reiniciar ahora**.
+   2. Solucionar problemas > Opciones avanzadas > **Simbolo del sistema**.
+   3. `dir C:\Windows` para confirmar la letra del disco (ahi puede ser otra; si no existe, prueba con `D:`).
+   4. `chkdsk C: /f` con la letra correcta. Al terminar, `exit` y **Continuar**.
+3. Para comprobarlo, en PowerShell como administrador: `Repair-Volume -DriveLetter C -Scan` tiene que decir `NoErrorsFound`. En la siguiente limpieza el TRIM vuelve a funcionar.
+
 ## Lo que no hace, a proposito
 
 - **Limpiar el registro**: no acelera nada medible y un error puede dejar programas o Windows sin arrancar. Microsoft no da soporte a sistemas danados por limpiadores de registro.
@@ -264,6 +276,7 @@ Termina con codigo 1 si algo falla. Para que se ejecute solo antes de cada commi
 
 ## Historial de cambios
 
+- **2026-11-26** - Nueva seccion "Reparar el disco" (en Recomendaciones de uso): que hacer cuando el resumen muestra un error del sistema de archivos o el TRIM bloqueado, incluido el modo de recuperacion cuando `chkdsk` no funciona dentro de Windows. El resumen remite a esa seccion y el log deja los pasos.
 - **2026-11-26** - Tras la primera ejecucion real de esta version: el paso 16 ya no intenta actualizar VS Code si esta abierto (su instalador se cancelaba y el resumen mostraba como motivo la ruta de un log); ahora sale en "Se actualizan solas" con el motivo. El paso 10 muestra la fecha del punto de restauracion como dia/mes.
 - **2026-11-26** - Sin permisos de administrador el script ya no hace una limpieza a medias: avisa y se cierra sin tocar nada (ni el log, ni el historial, ni el correo). Por eso ya no hay casos con una sola pregunta.
 - **2026-11-26** - Las preguntas del inicio aceptan `T` (o `todas`): si a esa pregunta y a todas las que faltan. Las demas tarjetas se siguen mostrando (y quedan en el log) con `-> SI (todas)`. Enter sin escribir nada ya no cuenta como No: se vuelve a preguntar.
