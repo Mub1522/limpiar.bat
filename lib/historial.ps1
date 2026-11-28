@@ -89,6 +89,16 @@ function Get-PasosLentos($ruta, $pasos, $pasosFijos = @(2, 3, 5, 7, 8, 14, 15, 1
     }
 }
 
+# Pasos que tardaron mas de $limite segundos (1 h), aunque no haya historial con que comparar: un paso
+# nunca deberia tardar tanto. El mas largo primero. Caso real del 27/11/2026, en otro equipo y en su
+# primera ejecucion: SFC tardo 3 h 20 min (la pregunta decia 10-60 min) y el resumen no lo mencionaba.
+function Get-PasosLargos($pasos, $limite = 3600) {
+    if (-not $pasos) { return }
+    foreach ($n in $pasos.Keys) {
+        if ($pasos[$n] -ge $limite) { [pscustomobject]@{ Paso = [int]"$n"; Segundos = $pasos[$n] } }
+    }
+}
+
 # A que ritmo se esta llenando C:, con una recta de minimos cuadrados sobre el espacio libre despues de
 # cada limpieza de los ultimos 120 dias (mas la de hoy). Como todos los puntos son despues de limpiar,
 # lo que se mide es lo que se pierde aunque se limpie. Necesita 4 puntos y 14 dias de historial; si no, $null.

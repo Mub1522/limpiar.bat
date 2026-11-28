@@ -159,6 +159,50 @@ function Write-Lista($nombres) {
     Add-Html '</div>'
 }
 
+# Nombres de la tabla de apps en consola: el nombre, recortado si no cabe. Solo si al recortar dos apps quedan
+# iguales (ej. "Microsoft Visual C++ 2013 Redi..." x64 y x86) se usa el Id, que es unico. Antes se usaba el Id
+# en cuanto el nombre no cabia, y la tabla mezclaba nombres e Ids (27/11/2026).
+function Get-NombresTablaApps($apps, $ancho) {
+    $apps = @($apps)
+    $recortados = @($apps | ForEach-Object { (Format-Ancho $_.Nombre $ancho).TrimEnd() })
+    $repetidos = @($recortados | Group-Object | Where-Object Count -gt 1 | ForEach-Object Name)
+    $nombres = for ($i = 0; $i -lt $apps.Count; $i++) {
+        $id = $apps[$i].Id
+        if ($recortados[$i] -in $repetidos -and $id -and $id.Length -lt $ancho) { $id } else { $recortados[$i] }
+    }
+    return , @($nombres)
+}
+
+# "45 min" o "3 h 21 min"
+function Format-Duracion($segundos) {
+    $min = [math]::Round($segundos / 60)
+    if ($min -lt 60) { return "$([math]::Max(1, $min)) min" }
+    return '{0} h {1:00} min' -f [math]::Floor($min / 60), ($min % 60)
+}
+
+# Por que un paso pudo tardar mas de 1 h (Get-PasosLargos)
+function Get-NotaPasoLargo($paso) {
+    switch ($paso) {
+        10 { 'SFC y DISM suelen tardar 10-60 min: tanto tiempo apunta a un disco lento o muy ocupado (revisa el modelo y la temperatura del SSD)' }
+        16 { 'Actualizar muchas aplicaciones puede tardar: el detalle de cada una esta en el log' }
+        default { 'Un paso no deberia tardar mas de 1 h: el detalle esta en el log' }
+    }
+}
+
+# Si el espacio libre bajo durante la limpieza, por que (o $null si no bajo). Bajar no es un error: los puntos de
+# restauracion crecen mientras DISM, SFC y los instaladores cambian archivos, y las apps nuevas ocupan mas.
+function Get-NotaEspacioBaja($d) {
+    if ($d.LibreFin - $d.LibreInicio -gt -100MB) { return $null }
+    $causas = @()
+    if ($null -ne $d.PuntosInicio -and $null -ne $d.PuntosFin -and $d.PuntosFin - $d.PuntosInicio -ge 100MB) {
+        $causas += 'los puntos de restauracion crecieron {0} (vuelve cuando se reemplazan)' -f (Format-Tamano ($d.PuntosFin - $d.PuntosInicio))
+    }
+    $actualizadas = @($d.AppsActualizadas).Where({ $_ }).Count
+    if ($actualizadas) { $causas += "se actualizaron $actualizadas app(s)" }
+    $causas += 'Windows Update pudo descargar archivos'
+    return 'Bajo porque ' + ($causas -join ', ') + '. No es basura de la limpieza'
+}
+
 function Write-TablaApps($titulo, $apps, $color, [switch]$ConMotivo) {
     if (-not $apps) { return }
     $apps = @($apps)
@@ -167,11 +211,10 @@ function Write-TablaApps($titulo, $apps, $color, [switch]$ConMotivo) {
     Add-Html ('<div style="font-size:14px;font-weight:700;color:' + (Get-ColorHtml $color) + ';padding:12px 0 2px">' +
         (Format-HtmlTexto "$titulo ($($apps.Count))") + '</div>')
 
-    foreach ($a in $apps) {
-        # Consola: si el nombre no cabe se muestra el Id, porque al recortar dos apps pueden
-        # quedar iguales (ej. "Microsoft Visual C++ 2013 Redi..." x64 y x86); el Id es unico
-        $nombre = if ($a.Nombre.Length -gt 33 -and $a.Id -and $a.Id.Length -le 33) { $a.Id } else { $a.Nombre }
-        Out-Resumen ('      ' + (Format-Ancho $nombre 34) + (Format-Ancho $a.Instalada 15) + '-> ' + $a.Disponible) $color
+    $nombres = Get-NombresTablaApps $apps 34
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        $a = $apps[$i]
+        Out-Resumen ('      ' + (Format-Ancho $nombres[$i] 34) + (Format-Ancho $a.Instalada 15) + '-> ' + $a.Disponible) $color
         if ($ConMotivo -and $a.Motivo) { Out-Resumen "        motivo: $($a.Motivo)" DarkGray }
 
         # Correo: nombre completo (el texto se ajusta solo) y las versiones debajo
@@ -208,11 +251,18 @@ function Show-Resumen($d) {
     $liberadoTexto = if ($d.Total -ge 1000) { '{0:N2} GB' -f ($d.Total / 1024) } else { '{0:N0} MB' -f $d.Total }
     Write-Dato 'Liberado por la limpieza' $liberadoTexto Green
     Write-Dato 'Espacio libre en C:' ('{0:N1} -> {1:N1} GB ({2}{3:N1} GB)' -f ($d.LibreInicio / 1GB), ($d.LibreFin / 1GB), $signo, $delta)
+    $notaEspacio = Get-NotaEspacioBaja $d
+    if ($notaEspacio) { Write-Nota $notaEspacio Yellow }
     # Cuanto tardo (sin contar las preguntas) y si algun paso que hace siempre lo mismo tardo el triple de lo normal
     if ($d.SegundosLimpieza) {
         $lento = @($d.PasosLentos)[0]
+        $largo = @($d.PasosLargos)[0]
         if ($lento) {
             Write-Estado 'AVISO' 'Duracion' ('{0:N0} min; el paso {1} tardo {2:N0} min y lo normal es {3:N0} min (ver log)' -f ($d.SegundosLimpieza / 60), $lento.Paso, ($lento.Segundos / 60), [math]::Max(1, $lento.Normal / 60))
+        } elseif ($largo) {
+            # INFO y no AVISO: la primera vez no hay con que comparar, y a veces es esperable (muchas apps que actualizar)
+            Write-Estado 'INFO' 'Duracion' ('{0}; el paso {1} tardo {2}' -f (Format-Duracion $d.SegundosLimpieza), $largo.Paso, (Format-Duracion $largo.Segundos))
+            Write-Nota (Get-NotaPasoLargo $largo.Paso)
         } else {
             Write-Dato 'Duracion' ('{0:N0} min' -f [math]::Max(1, $d.SegundosLimpieza / 60)) White
         }
@@ -510,6 +560,7 @@ function Show-Resumen($d) {
         Write-TablaApps 'No se pudieron actualizar' $d.AppsFallidas Red -ConMotivo
         Write-TablaApps 'Siguen pendientes' $d.AppsPendientes Yellow
         Write-TablaApps 'Se actualizan solas' $d.AppsOmitidas DarkGray -ConMotivo
+        Write-TablaApps 'Winget no las puede actualizar' $d.AppsNoAplican DarkGray -ConMotivo
         if (-not $d.AppsPendientes -and -not $d.AppsFallidas) { Write-Nota 'Todo lo demas esta al dia' Green }
     } elseif ($d.AppsDisponibles) {
         Write-TablaApps 'Con actualizacion disponible' $d.AppsDisponibles Yellow

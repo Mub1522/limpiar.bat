@@ -4,6 +4,25 @@
 
 . (Join-Path $PSScriptRoot 'cargar.ps1')
 
+Describe 'ConvertFrom-ResultadoWinget (paso 16)' {
+    It 'cambia la ruta del log del instalador por un motivo en palabras (sin el nombre de usuario)' {
+        $r = ConvertFrom-ResultadoWinget -1978335226 'El registro del instalador esta disponible en: C:\Users\alguien\AppData\Local\x.log'
+        $r.Tipo | Should Be 'Fallo'
+        $r.Motivo | Should Match 'estaba abierta'
+        $r.Motivo | Should Not Match '\\'
+    }
+    It 'una version que no aplica (de pago) no es un fallo' {
+        (ConvertFrom-ResultadoWinget -1978335189 'Una version mas reciente...').Tipo | Should Be 'NoAplica'
+    }
+    It 'reconoce la desinstalacion cancelada (1602)' {
+        (ConvertFrom-ResultadoWinget -1978335184 'Error de desinstalacion con el codigo de salida: 1602').Motivo | Should Match 'cancelado'
+    }
+    It 'con un codigo desconocido deja el texto de winget, salvo que sea una ruta' {
+        (ConvertFrom-ResultadoWinget -1 'Hash mismatch').Motivo | Should Be 'Hash mismatch (codigo -1)'
+        (ConvertFrom-ResultadoWinget -1 'ver D:\logs\a.log').Motivo | Should Not Match '\\'
+    }
+}
+
 Describe 'ConvertFrom-SalidaTrim (paso 14)' {
     It 'quita el progreso en ingles y en espanol y parte el informe final en lineas' {
         $mensajes = @(

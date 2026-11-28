@@ -119,6 +119,16 @@ function Get-FolderSize($path) {
     (Get-ContenidoRecursivo $path | Where-Object { -not $_.PSIsContainer } | Measure-Object Length -Sum).Sum
 }
 
+# Bytes que ocupan los puntos de restauracion (instantaneas) de C:, o $null si no se pudo leer (necesita
+# administrador). Crecen mientras la limpieza cambia archivos de Windows (DISM, SFC, instaladores), y eso
+# baja el espacio libre: el 27/11/2026, en otro equipo, C: termino con 5,5 GB menos y el resumen no lo explicaba.
+function Get-EspacioPuntos {
+    $vol = Get-CimInstance Win32_Volume -Filter "DriveLetter='C:'" -ErrorAction SilentlyContinue
+    $sombras = @(Get-CimInstance Win32_ShadowStorage -ErrorAction SilentlyContinue -ErrorVariable errSombra)
+    if (-not $vol -or $errSombra) { return $null }
+    return [double](@($sombras | Where-Object { $_.Volume.DeviceID -eq $vol.DeviceID }) | Measure-Object UsedSpace -Sum).Sum
+}
+
 # Indica si un archivo o carpeta se uso despues de $limite (en una carpeta mira todo su contenido;
 # se detiene en el primer archivo reciente que encuentra)
 function Test-Reciente($item, $limite) {
@@ -479,6 +489,35 @@ function Get-Columna($linea, $desde, $hasta) {
     return $linea.Substring($desde, $largo).Trim()
 }
 
+# Resultado de un "winget upgrade" que fallo, en palabras: el texto de winget a veces es solo la ruta del
+# log del instalador (con el nombre de usuario), que no explica nada y no debe ir al correo. Los codigos
+# salen de "winget error <codigo>". Tipo 'NoAplica': winget nunca la va a poder actualizar (no es un fallo).
+# Caso real del 27/11/2026 en otro equipo: 5 apps fallaron y 3 motivos eran rutas de log.
+function ConvertFrom-ResultadoWinget($codigo, $resultado) {
+    $abierta = 'suele pasar si la app estaba abierta'
+    $motivo = switch ($codigo) {
+        -1978335189 { 'la version nueva no aplica a este equipo (suele ser una version de pago o para otro sistema): se actualiza a mano' }
+        -1978335226 { "fallo su instalador; $abierta" }
+        -1978335159 { "fallo su instalador (MSI); $abierta" }
+        -1978335184 {
+            if ("$resultado" -match '\b1602\b') { "no se pudo quitar la version anterior (cancelado, codigo 1602); $abierta o su launcher" }
+            else { "no se pudo quitar la version anterior; $abierta" }
+        }
+        -1978335146 { 'su instalador no funciona como administrador' }
+        -1978334975 { 'la app estaba abierta' }
+        -1978334974 { 'habia otra instalacion en curso' }
+        -1978334973 { 'un archivo de la app estaba en uso' }
+        -1978334971 { 'no hay espacio en el disco' }
+        -1978334969 { 'sin conexion a internet' }
+        default {
+            if (-not "$resultado" -or "$resultado" -match '[A-Za-z]:\\') { 'fallo la instalacion (detalle en el log de winget)' }
+            else { "$resultado" }
+        }
+    }
+    $tipo = if ($codigo -eq -1978335189) { 'NoAplica' } else { 'Fallo' }
+    return [pscustomobject]@{ Tipo = $tipo; Motivo = "$motivo (codigo $codigo)" }
+}
+
 # Aplicaciones con actualizacion disponible segun winget, leidas de su tabla de texto.
 # Las columnas se ubican por la posicion de los titulos (el idioma de winget no importa).
 # Deja en $script:estadoWinget si la consulta funciono, para no decir "todo al dia" cuando
@@ -741,6 +780,7 @@ $dockerLiberado = 0          # bytes liberados dentro del disco virtual de Docke
 $imagenesDockerBorradas = @()
 $actualizacionesWsl = @()    # resultado de apt por distribucion WSL (paso 12)
 $libreInicio = (Get-PSDrive C).Free
+$puntosInicio = Get-EspacioPuntos   # para explicar en el resumen si el espacio libre baja
 $maxPuntos = 2         # puntos de restauracion a conservar (se borran los mas viejos)
 $horasTemporales = 24  # en los pasos 1 y 2 solo se borran temporales sin modificar en este tiempo
 $diasVolcados = 7      # paso 7: si hubo un pantallazo azul en estos dias, se conservan los volcados de memoria
@@ -856,7 +896,7 @@ if ($bytesRestos -gt 100MB -and -not ($restosActualizacion | Where-Object Recien
     [void]$preguntas.Add(@{ Clave = 'restos'; Titulo = 'Borrar los restos de la ultima actualizacion grande de Windows'; Detalle = $detalle })
 }
 [void]$preguntas.Add(@{ Clave = 'reparacion'; Titulo = 'Revisar y reparar archivos de Windows (SFC + DISM)'
-    Detalle = @('Crea un punto de restauracion antes. Tarda 10-60 minutos.') })
+    Detalle = @('Crea un punto de restauracion antes. Tarda 10-60 minutos; en un disco lento, varias horas.') })
 if ($imagenesDockerSinUso) {
     # Se muestra exactamente que se borraria; despues se borran solo esas (por nombre)
     $bytesImagenes = ($imagenesDockerSinUso | Sort-Object Id -Unique | Measure-Object Bytes -Sum).Sum
@@ -1536,6 +1576,7 @@ Start-Paso 16 "Paso 16: aplicaciones desactualizadas (winget)"
 $appsActualizadas = @()
 $appsFallidas = @()
 $appsOmitidas = @()
+$appsNoAplican = @()   # winget las lista pero no las puede actualizar (version de pago, version que no lee bien)
 # Apps que se actualizan solas y que winget no debe tocar:
 # - App Installer: actualizarlo cierra el propio winget a mitad de camino
 # - Edge: winget falla siempre ("install technology is different"); Edge Update lo mantiene al dia
@@ -1548,8 +1589,14 @@ $appsAutoactualizables = @{
 # Apps cuyo instalador se cancela si estan abiertas, y que el script nunca cierra (puede haber archivos sin
 # guardar). Id de winget -> proceso. Caso real del 26/11/2026: VS Code abierto, el instalador vio "Visual
 # Studio Code esta ejecutandose", cancelo solo y winget devolvio -1978335226 con la ruta de su log como motivo.
+# Epic y ShareX: el 27/11/2026, en otro equipo, fallaron con los codigos de "fallo el instalador" (-1978335159,
+# -1978335226) y "desinstalacion cancelada" (1602); los dos arrancan con Windows. Epic Online Services se
+# desinstala junto con el launcher, asi que tambien se salta si el launcher esta abierto.
 $appsSiAbiertas = @{
-    'Microsoft.VisualStudioCode' = 'Code'
+    'Microsoft.VisualStudioCode'   = 'Code'
+    'EpicGames.EpicGamesLauncher'  = 'EpicGamesLauncher'
+    'EpicGames.EpicOnlineServices' = 'EpicGamesLauncher'
+    'ShareX.ShareX'                = 'ShareX'
 }
 $appsDisponibles = @(Get-AppsDesactualizadas $trabajoWinget)
 $estadoWingetInicial = $estadoWinget
@@ -1588,14 +1635,18 @@ if ($seActualizo) {
         $resultado = $salida | ForEach-Object { ("$_" -split "`r")[-1].Trim() } |
             Where-Object { $_ -and $_ -notmatch '^[\s\-\\|/]+$' } | Select-Object -Last 1
         # Algunos instaladores terminan pidiendo reiniciar y winget lo informa con un codigo distinto de 0
-        # aunque la app quedo instalada: no contarlo como error
-        $instalada = ($codigo -eq 0) -or [bool]($salida -match 'Successfully installed')
+        # (-1978334967 = "reinicia para terminar") aunque la app quedo instalada: no contarlo como error
+        $instalada = ($codigo -in 0, -1978334967) -or [bool]($salida -match 'Successfully installed')
         if ($instalada) {
             Log "    OK: $resultado" Green
             $appsActualizadas += $app
         } else {
+            # El texto original de winget queda en el log; al resumen va el motivo en palabras
+            $fallo = ConvertFrom-ResultadoWinget $codigo $resultado
             Log "    ERROR (codigo $codigo): $resultado" Red
-            $appsFallidas += $app | Add-Member -NotePropertyName Motivo -NotePropertyValue $resultado -PassThru -Force
+            Log "    motivo: $($fallo.Motivo)" DarkYellow
+            $app = $app | Add-Member -NotePropertyName Motivo -NotePropertyValue $fallo.Motivo -PassThru -Force
+            if ($fallo.Tipo -eq 'NoAplica') { $appsNoAplican += $app } else { $appsFallidas += $app }
         }
     }
 } elseif (-not $hacerActualizar) {
@@ -1603,18 +1654,19 @@ if ($seActualizo) {
 }
 # Lo que sigue pendiente despues de actualizar (sin repetir las que fallaron ni las que se actualizan solas)
 $appsPendientes = if ($seActualizo) {
-    @(Get-AppsDesactualizadas | Where-Object { $_.Id -notin $appsFallidas.Id -and $_.Id -notin $appsOmitidas.Id -and -not $appsAutoactualizables.ContainsKey($_.Id) })
+    @(Get-AppsDesactualizadas | Where-Object { $_.Id -notin $appsFallidas.Id -and $_.Id -notin $appsOmitidas.Id -and $_.Id -notin $appsNoAplican.Id -and -not $appsAutoactualizables.ContainsKey($_.Id) })
 } else { $appsDisponibles }
 # winget a veces dice que instalo bien pero despues la sigue listando con la misma version disponible
-# (le pasaba a Google Play Games: no lee bien su version). No contarla como actualizada ni como pendiente.
+# (Google Play Games, 27/11/2026: paso de 26.11.x a 159.x y winget no compara bien las dos numeraciones).
+# No es un fallo que se pueda resolver: va con las que winget no puede actualizar, no con las fallidas.
 if ($seActualizo) {
     $sinEfecto = @($appsActualizadas | Where-Object { $_.Id -in $appsPendientes.Id })
     if ($sinEfecto) {
-        $motivo = 'winget dijo que se instalo, pero la sigue listando como desactualizada'
+        $motivo = 'winget la instala pero la sigue listando (no compara bien sus versiones): se puede ignorar'
         foreach ($app in $sinEfecto) { Log "  $($app.Nombre): $motivo" DarkYellow }
         $appsActualizadas = @($appsActualizadas | Where-Object { $_.Id -notin $sinEfecto.Id })
         $appsPendientes = @($appsPendientes | Where-Object { $_.Id -notin $sinEfecto.Id })
-        $appsFallidas += $sinEfecto | Add-Member -NotePropertyName Motivo -NotePropertyValue $motivo -PassThru -Force
+        $appsNoAplican += $sinEfecto | Add-Member -NotePropertyName Motivo -NotePropertyValue $motivo -PassThru -Force
     }
 }
 
@@ -1640,6 +1692,15 @@ Log ("Duracion: {0:N0} min. Por paso (s): {1}" -f ($segundosLimpieza / 60), (Con
 $pasosLentos = @(Get-PasosLentos $archivoHistorial $duracionPasos)
 foreach ($p in $pasosLentos) {
     Log ("  el paso {0} tardo {1:N0} min; lo normal es {2:N0} min" -f $p.Paso, ($p.Segundos / 60), ($p.Normal / 60)) DarkYellow
+}
+$pasosLargos = @(Get-PasosLargos $duracionPasos | Sort-Object Segundos -Descending)
+foreach ($p in $pasosLargos) {
+    Log ("  el paso {0} tardo mas de 1 h ({1:N0} min)" -f $p.Paso, ($p.Segundos / 60)) DarkYellow
+}
+# Lo que ocupan los puntos de restauracion ahora (despues del paso 15, que borra los viejos)
+$puntosFin = Get-EspacioPuntos
+if ($null -ne $puntosInicio -and $null -ne $puntosFin) {
+    Log ("Puntos de restauracion: {0} -> {1}" -f (Format-Tamano $puntosInicio), (Format-Tamano $puntosFin)) DarkGray
 }
 
 Log "=== Limpieza completada ===" Cyan
@@ -1680,6 +1741,10 @@ Show-Resumen @{
     AppsFallidas     = $appsFallidas
     AppsPendientes   = $appsPendientes
     AppsOmitidas     = $appsOmitidas
+    AppsNoAplican    = $appsNoAplican
+    PuntosInicio     = $puntosInicio
+    PuntosFin        = $puntosFin
+    PasosLargos      = $pasosLargos
     DistrosApt       = $distrosApt
     ActualizarWsl    = $actualizarWsl
     ActualizacionesWsl = $actualizacionesWsl
